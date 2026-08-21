@@ -141,9 +141,9 @@ export const sanitizeFileName = (value: string): string =>
  * Además, cualquier error de red/timeout (sin respuesta, p.ej. ECONNRESET,
  * ETIMEDOUT) se considera reintentable por ser transitorio.
  */
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+export const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 
-const isRetryableError = (error: unknown): boolean => {
+export const isRetryableError = (error: unknown): boolean => {
   if (!(error instanceof AxiosError)) return false;
   if (!error.response) return true; // fallo de red/timeout sin respuesta HTTP.
   return RETRYABLE_STATUS.has(error.response.status);
@@ -156,7 +156,7 @@ const isRetryableError = (error: unknown): boolean => {
  *  3. Aplica *full jitter* (espera aleatoria en [0, base]) para evitar que
  *     múltiples descargas reintenten sincronizadas (thundering herd).
  */
-const computeRetryDelay = (
+export const computeRetryDelay = (
   error: unknown,
   exponentialWaitMs: number,
   maxBackoffMs: number
@@ -167,7 +167,7 @@ const computeRetryDelay = (
 };
 
 /** Interpreta la cabecera `Retry-After`: segundos o fecha HTTP. */
-const parseRetryAfterMs = (error: unknown): number | undefined => {
+export const parseRetryAfterMs = (error: unknown): number | undefined => {
   if (!(error instanceof AxiosError)) return undefined;
   const header = error.response?.headers["retry-after"];
   if (header === undefined) return undefined;
