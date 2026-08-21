@@ -1,4 +1,12 @@
-import { ScraperConfig, ScraperMode } from "./types";
+import {
+  ColumnMapping,
+  DocumentoOefa,
+  DownloadConfig,
+  ScraperConfig,
+  ScraperMode,
+  ScraperSite,
+  SiteProfile
+} from "./types";
 
 /**
  * Argumentos de línea de comandos normalizados. Todos los valores son
@@ -19,19 +27,31 @@ export interface CliArgs {
  * defecto conservadores.
  */
 export function resolveScraperConfig(args: CliArgs): ScraperConfig {
-  const baseUrl = (process.env.OEFA_BASE_URL ?? "https://repositorio.oefa.gob.pe").replace(/\/+$/, "");
+  const site = (process.env.SCRAPER_SITE as ScraperSite | undefined) ?? "oefa";
+  const profile = SITE_PROFILES[site] ?? SITE_PROFILES.oefa;
+
+  const baseUrl = (
+    process.env.BASE_URL ?? process.env.OEFA_BASE_URL ?? profile.urls.baseUrl
+  ).replace(/\/+$/, "");
+
+  const startUrl = process.env.START_URL ?? process.env.OEFA_START_URL ?? profile.urls.startUrl;
+  const searchPath = process.env.SEARCH_PATH ?? process.env.OEFA_SEARCH_PATH ?? profile.urls.searchPath;
+
+  const columns = parseColumnMapping(process.env.COLUMNS) ?? profile.primeFaces.columns;
+  const download = parseDownloadConfig(process.env.DOWNLOAD_MODE, profile.primeFaces.download);
 
   return {
+    site,
     mode: parseMode(args.mode ?? process.env.SCRAPER_MODE) ?? "jsf",
     urls: {
       baseUrl,
-      startUrl: process.env.OEFA_START_URL ?? baseUrl,
-      searchPath: process.env.OEFA_SEARCH_PATH ?? "/search"
+      startUrl,
+      searchPath
     },
     search: {
       query: args.query.trim(),
-      inputName: process.env.JSF_SEARCH_INPUT ?? "form:txtSearch",
-      buttonName: process.env.JSF_SEARCH_BUTTON ?? "form:btnSearch"
+      inputName: process.env.JSF_SEARCH_INPUT ?? profile.search.inputName,
+      buttonName: process.env.JSF_SEARCH_BUTTON ?? profile.search.buttonName
     },
     output: {
       jsonPath: process.env.OUTPUT_JSON ?? "output/documentos-oefa.json",
@@ -50,11 +70,13 @@ export function resolveScraperConfig(args: CliArgs): ScraperConfig {
       timeoutMs: parseIntEnv("TIMEOUT_MS", 30000)
     },
     primeFaces: {
-      formSelector: process.env.JSF_FORM_SELECTOR ?? "form",
-      tableSelector: process.env.OEFA_TABLE_SELECTOR ?? "table",
-      rowSelector: process.env.JSF_ROW_SELECTOR ?? "tr.ui-widget-content",
-      rowsPerPage: args.rowsPerPage ?? parseIntEnv("ROWS_PER_PAGE", 10),
-      maxPages: args.maxPages ?? parseIntEnv("MAX_PAGES", 3)
+      formSelector: process.env.JSF_FORM_SELECTOR ?? profile.primeFaces.formSelector,
+      tableSelector: process.env.OEFA_TABLE_SELECTOR ?? profile.primeFaces.tableSelector,
+      rowSelector: process.env.JSF_ROW_SELECTOR ?? profile.primeFaces.rowSelector,
+      rowsPerPage: args.rowsPerPage ?? parseIntEnv("ROWS_PER_PAGE", profile.primeFaces.rowsPerPage),
+      maxPages: args.maxPages ?? parseIntEnv("MAX_PAGES", 3),
+      columns,
+      download
     },
     selectors: {
       resultSelector: process.env.SELECTOR_RESULT ?? "article",
@@ -65,6 +87,109 @@ export function resolveScraperConfig(args: CliArgs): ScraperConfig {
     }
   };
 }
+
+/**
+ * Perfiles de sitio. Solo son data: para soportar un sitio nuevo basta con
+ * agregar una entrada aquí (o sobreescribir cualquier valor vía variables de
+ * entorno). La columna 0 se usa como `id` de fila; las demás se mapean al
+ * campo de `DocumentoOefa` indicado en `columns`.
+ *
+ * El perfil `pj` es un punto de partida: la URL y el mapeo de columnas deben
+ * ajustarse inspeccionando el DOM real de jurisprudencia.pj.gob.pe (el sitio
+ * aplica protección anti-bot, por lo que no se pudo auto-descubrir).
+ */
+export const SITE_PROFILES: Record<ScraperSite, SiteProfile> = {
+  oefa: {
+    urls: {
+      baseUrl: "https://publico.oefa.gob.pe",
+      startUrl: "https://publico.oefa.gob.pe/repdig/consulta/consultaTfa.xhtml",
+      searchPath: ""
+    },
+    search: {
+      inputName: "form:txtSearch",
+      buttonName: "form:btnSearch"
+    },
+    primeFaces: {
+      formSelector: "form",
+      tableSelector: "table",
+      rowSelector: "tr.ui-widget-content",
+      rowsPerPage: 10,
+      columns: [
+        "numero",
+        "nroExpediente",
+        "administrado",
+        "unidadFiscalizable",
+        "sector",
+        "nroResolucionApelacion"
+      ],
+      download: {
+        mode: "mojarra",
+        signature: "mojarra\\.jsfcljs",
+        paramKey: "param_uuid"
+      }
+    }
+  },
+  pj: {
+    urls: {
+      baseUrl: "https://jurisprudencia.pj.gob.pe",
+      startUrl:
+        "https://jurisprudencia.pj.gob.pe/jurisprudenciaweb/faces/page/resultado.xhtml",
+      searchPath: ""
+    },
+    search: {
+      inputName: "form:txtSearch",
+      buttonName: "form:btnSearch"
+    },
+    primeFaces: {
+      formSelector: "form",
+      tableSelector: "table",
+      rowSelector: "tr.ui-widget-content",
+      rowsPerPage: 10,
+      // TODO: ajustar al DOM real del PJ tras inspeccionar la pagina.
+      columns: [
+        "numero",
+        "nroExpediente",
+        "administrado",
+        "unidadFiscalizable",
+        "sector",
+        "nroResolucionApelacion"
+      ],
+      download: {
+        mode: "mojarra",
+        signature: "mojarra\\.jsfcljs",
+        paramKey: "param_uuid"
+      }
+    }
+  }
+};
+
+/** Parsea `COLUMNS="numero,nroExpediente,..."` (campos vacíos → null). */
+const parseColumnMapping = (value: string | undefined): ColumnMapping | undefined => {
+  if (value === undefined || value.trim() === "") return undefined;
+  return value.split(",").map((field) => {
+    const key = field.trim();
+    return key === "" ? null : (key as keyof DocumentoOefa);
+  });
+};
+
+/** Construye `DownloadConfig` desde env, cayendo al perfil por defecto. */
+const parseDownloadConfig = (
+  mode: string | undefined,
+  fallback: DownloadConfig
+): DownloadConfig => {
+  if (mode !== "mojarra" && mode !== "link") return fallback;
+  const config: DownloadConfig = {
+    mode,
+    signature: process.env.DOWNLOAD_SIGNATURE ?? fallback.signature,
+    paramKey: process.env.DOWNLOAD_PARAM_KEY ?? fallback.paramKey
+  };
+  // exactOptionalPropertyTypes: solo se asigna si está definido.
+  const linkSelector = process.env.DOWNLOAD_LINK_SELECTOR ?? fallback.linkSelector;
+  if (linkSelector !== undefined) config.linkSelector = linkSelector;
+  const linkAttr = process.env.DOWNLOAD_LINK_ATTR ?? fallback.linkAttr;
+  if (linkAttr !== undefined) config.linkAttr = linkAttr;
+  return config;
+};
 
 /**
  * Parseo liviano de `process.argv.slice(2)`:

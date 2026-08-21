@@ -127,6 +127,15 @@ export class PrimeFacesClient {
     });
   }
 
+  /**
+   * Descarga directa por GET de una URL de PDF (modo de descarga `link`).
+   * Reutiliza el `HttpClient` (cookie jar, cabeceras) para mantener la
+   * sesión del sitio.
+   */
+  async streamUrl(url: string): Promise<AxiosResponse> {
+    return this.http.stream(url);
+  }
+
   private fromFullHtml(response: HttpTextResponse): JsfPage {
     const viewState = this.parser.extractViewState(response.html);
     if (!viewState) {

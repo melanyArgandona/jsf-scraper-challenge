@@ -1,7 +1,25 @@
 import * as cheerio from "cheerio";
-import { DocumentoOefa, DownloadButton, ParsedTablePage, SearchResult, StaticSelectors } from "../types";
+import {
+  ColumnMapping,
+  DocumentoOefa,
+  DownloadButton,
+  DownloadConfig,
+  ParsedTablePage,
+  SearchResult,
+  StaticSelectors
+} from "../types";
 
 const DEFAULT_ROW_SELECTOR = "tr.ui-widget-content";
+
+/** Mapeo por defecto (OEFA TFA) si no se provee uno por sitio. */
+const DEFAULT_COLUMNS: ColumnMapping = [
+  "numero",
+  "nroExpediente",
+  "administrado",
+  "unidadFiscalizable",
+  "sector",
+  "nroResolucionApelacion"
+];
 
 /**
  * Límite de parsing DOM (via [cheerio]). Única responsabilidad: convertir
@@ -13,10 +31,16 @@ export class HtmlParser {
    * Parsea una página de la tabla del TFA: filas de datos, botones de
    * descarga, ViewState vigente e ID del paginador PrimeFaces.
    */
-  parseTablePage(html: string, tableSelector?: string, rowSelector?: string): ParsedTablePage {
+  parseTablePage(
+    html: string,
+    tableSelector?: string,
+    rowSelector?: string,
+    columns?: ColumnMapping,
+    download?: DownloadConfig
+  ): ParsedTablePage {
     const page: ParsedTablePage = {
-      documentos: this.parseDocumentos(html, tableSelector, rowSelector),
-      downloadButtons: this.extractDownloadButtons(html)
+      documentos: this.parseDocumentos(html, tableSelector, rowSelector, columns),
+      downloadButtons: this.extractDownloadButtons(html, download)
     };
 
     const viewState = this.extractViewState(html);
@@ -28,22 +52,18 @@ export class HtmlParser {
   }
 
   /**
-   * Extrae las filas de la tabla de PrimeFaces y mapea cada columna en el
-   * orden exacto de la consulta del TFA:
-   *
-   *   td.eq(0) → numero
-   *   td.eq(1) → nroExpediente
-   *   td.eq(2) → administrado
-   *   td.eq(3) → unidadFiscalizable
-   *   td.eq(4) → sector
-   *   td.eq(5) → nroResolucionApelacion
-   *
-   * Usa el selector estándar de filas de datos de PrimeFaces
-   * (`tr.ui-widget-content`) o, si se agota, cualquier `<tr>` con celdas.
-   * El `id` de cada documento es el índice de fila (0, 1, 2…) requerido en
-   * el POST de PrimeFaces.
+   * Extrae las filas de la tabla y mapea cada columna según `columns`
+   * (índice → campo de `DocumentoOefa`), configurado por sitio. Las columnas
+   * marcadas `null` se descartan. Usa el selector de filas del sitio o, si se
+   * agota, cualquier `<tr>` con celdas. El `id` de cada documento es el índice
+   * de fila (0, 1, 2…), requerido en el POST de PrimeFaces.
    */
-  parseDocumentos(html: string, tableSelector?: string, rowSelector?: string): DocumentoOefa[] {
+  parseDocumentos(
+    html: string,
+    tableSelector?: string,
+    rowSelector?: string,
+    columns: ColumnMapping = DEFAULT_COLUMNS
+  ): DocumentoOefa[] {
     // cheerio descarta los `<tr>` sueltos (sin `<table>`), que es exactamente
     // lo que devuelve PrimeFaces en las respuestas de paginación. Se envuelven
     // en una `<table>` sintética antes de parsear.
@@ -52,7 +72,7 @@ export class HtmlParser {
     const scope = tableSelector ? `${tableSelector} ` : "";
     let rows = $(`${scope}${rowSelector ?? DEFAULT_ROW_SELECTOR}`);
     if (rows.length === 0) {
-      // El sitio del TFA devuelve en las respuestas de paginación `<tr>` sueltos
+      // Las respuestas de paginación de PrimeFaces devuelven `<tr>` sueltos
       // (solo el body de la tabla, sin `<table>`), por lo que el fallback debe
       // barrer filas globalmente en vez de ceñirse al `tableSelector`.
       rows = $("tr").filter(":has(td)");
@@ -62,24 +82,33 @@ export class HtmlParser {
 
     rows.each((index, row) => {
       const cells = $(row).find("td");
-      if (cells.length < 6) return;
+      const id = String(index);
+      const documento: DocumentoOefa = {
+        id,
+        numero: "",
+        nroExpediente: "",
+        administrado: "",
+        unidadFiscalizable: "",
+        sector: "",
+        nroResolucionApelacion: ""
+      };
 
-      const numero = normalize(cells.eq(0).text());
-      const nroExpediente = normalize(cells.eq(1).text());
-      const administrado = normalize(cells.eq(2).text());
-      const unidadFiscalizable = normalize(cells.eq(3).text());
-      const sector = normalize(cells.eq(4).text());
-      const nroResolucionApelacion = normalize(cells.eq(5).text());
-
-      documentos.push({
-        id: String(index),
-        numero,
-        nroExpediente,
-        administrado,
-        unidadFiscalizable,
-        sector,
-        nroResolucionApelacion
+      columns.forEach((field, colIndex) => {
+        if (field === null || field === undefined) return;
+        const value = normalize(cells.eq(colIndex).text());
+        // Solo asigna si el campo existe en el modelo (defensa ante perfiles mal configurados).
+        if (field in documento) {
+          (documento as unknown as Record<string, string>)[field] = value;
+        }
       });
+
+      // Descarta filas que no aporten ninguna columna mapeada.
+      const hasData = columns.some(
+        (field) => field !== null && (documento as unknown as Record<string, string>)[field] !== ""
+      );
+      if (!hasData) return;
+
+      documentos.push(documento);
     });
 
     return documentos;
@@ -129,27 +158,41 @@ export class HtmlParser {
   }
 
   /**
-   * Identifica los botones de descarga de PDF del TFA.
+   * Identifica los botones/enlaces de descarga de PDF según la configuración
+   * del sitio (`download`):
    *
-   * Los botones reales son `h:commandLink` que el navegador dispara con
-   * `mojarra.jsfcljs(document.getElementById('form'), {'<btnId>':'<btnId>',
-   * 'param_uuid':'<uuid>'}, '')`. Se detectan por el `onclick` con la FIRMA
-   * `mojarra.jsfcljs`; de ahí se extrae el client ID del botón y el token
-   * `param_uuid` (obligatorio para que el servidor devuelva el PDF).
+   * - Modo `mojarra`: botones con `onclick` que coincide con `signature`
+   *   (p.ej. `mojarra.jsfcljs`). Se extrae el client ID del botón y el token
+   *   `paramKey` (p.ej. `param_uuid`) del objeto literal del onclick.
+   * - Modo `link`: enlaces que cumplen `linkSelector`; se usa el atributo
+   *   `linkAttr` (por defecto `href`) como URL directa del PDF.
    */
-  extractDownloadButtons(html: string): DownloadButton[] {
+  extractDownloadButtons(html: string, download?: DownloadConfig): DownloadButton[] {
     const $ = cheerio.load(html);
     const buttons: DownloadButton[] = [];
+    const config = download ?? { mode: "mojarra" as const, signature: "mojarra\\.jsfcljs", paramKey: "param_uuid" };
 
+    if (config.mode === "link") {
+      const linkSelector = config.linkSelector ?? "a[href$='.pdf']";
+      const linkAttr = config.linkAttr ?? "href";
+      $(linkSelector).each((_, element) => {
+        const href = $(element).attr(linkAttr);
+        if (href) buttons.push({ id: "", paramUuid: "", href });
+      });
+      return buttons;
+    }
+
+    const signature = new RegExp(config.signature);
+    const paramKey = config.paramKey;
     $("a[onclick], button[onclick]").each((_, element) => {
       const onclick = $(element).attr("onclick") ?? "";
-      if (!/mojarra\.jsfcljs/.test(onclick)) return;
+      if (!signature.test(onclick)) return;
 
       // Dentro de `mojarra.jsfcljs(form, { 'a':'a', 'param_uuid':'uuid' }, '')`
       // se parsean los pares `'clave':'valor'` del objeto literal.
       const pairs = [...onclick.matchAll(/'([^']+)':'([^']*)'/g)].map((m) => [m[1], m[2]] as const);
-      const id = pairs.find(([key]) => key !== "param_uuid")?.[0];
-      const paramUuid = pairs.find(([key]) => key === "param_uuid")?.[1];
+      const id = pairs.find(([key]) => key !== paramKey)?.[0];
+      const paramUuid = pairs.find(([key]) => key === paramKey)?.[1];
 
       if (id && paramUuid) {
         buttons.push({ id, paramUuid });

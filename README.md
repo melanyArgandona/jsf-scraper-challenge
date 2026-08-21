@@ -41,6 +41,32 @@ Si no se pasa termino, se recorre el listado del repositorio (modo `jsf`).
 | `static` | HTML navegable + enlaces "next" | Sitios con paginacion HTML |
 | `dspace` | API REST publica de DSpace 7 (`/server/api/discover/search/objects`) | Repositorio OEFA publico actual (DSpace/Angular) |
 
+### Sitios (perfiles)
+
+El scraper conmuta entre sitios con la variable `SCRAPER_SITE`, sin tocar
+codigo. Cada sitio es un **perfil de datos** (`SITE_PROFILES` en `src/config.ts`)
+con sus URLs, campos JSF, selectores, mapeo de columnas y mecanismo de
+descarga. Cualquier valor del perfil puede sobreescribirse por variable de
+entorno.
+
+| `SCRAPER_SITE` | Sitio |
+| --- | --- |
+| `oefa` (defecto) | TFA de la OEFA — `publico.oefa.gob.pe/repdig/consulta/consultaTfa.xhtml` |
+| `pj` | Jurisprudencia PJ — `jurisprudencia.pj.gob.pe/.../resultado.xhtml` |
+
+```bash
+# Sitio OEFA (defecto)
+npm run scrape -- "mineria" --max-pages=2
+
+# Sitio PJ
+SCRAPER_SITE=pj npm run scrape -- "casacion" --max-pages=2
+```
+
+> Nota: `jurisprudencia.pj.gob.pe` aplica proteccion anti-bot (responde 403 a
+> clientes no navegador), por lo que el perfil `pj` es un punto de partida: su
+> `COLUMNS` y mecanismo de descarga deben ajustarse inspeccionando el DOM real
+> de la pagina (ver variables `COLUMNS`, `DOWNLOAD_*`).
+
 Salidas generadas:
 
 - `output/documentos-oefa.json`: consolidado de la tabla del TFA (`DocumentoOefa[]`) con las columnas exactas (`numero`, `nroExpediente`, `administrado`, `unidadFiscalizable`, `sector`, `nroResolucionApelacion`, `pdfPath`). Para el modo `jsf`.
@@ -86,16 +112,23 @@ JSF mantiene estado en campos ocultos, especialmente `javax.faces.ViewState`. Pr
 
 | Variable | Por defecto |
 | --- | --- |
-| `OEFA_BASE_URL` | `https://repositorio.oefa.gob.pe` |
-| `OEFA_SEARCH_PATH` | `/search` |
+| `SCRAPER_SITE` | `oefa` (`oefa` \| `pj`) |
+| `BASE_URL` / `OEFA_BASE_URL` | segun perfil (`publico.oefa.gob.pe`) |
+| `START_URL` / `OEFA_START_URL` | segun perfil (URL de la pagina de resultado) |
+| `SEARCH_PATH` / `OEFA_SEARCH_PATH` | segun perfil (`""`) |
 | `SCRAPER_MODE` | `jsf` |
 | `JSF_FORM_SELECTOR` | `form` |
 | `OEFA_TABLE_SELECTOR` | `table` |
 | `JSF_ROW_SELECTOR` | `tr.ui-widget-content` |
-| `JSF_ROW_PARAM` | `_rowindex` |
 | `JSF_SEARCH_INPUT` | `form:txtSearch` |
 | `JSF_SEARCH_BUTTON` | `form:btnSearch` |
-| `MAX_PAGES` / `ROWS_PER_PAGE` | `3` / `20` |
+| `COLUMNS` | mapeo de columnas del perfil (`"numero,nroExpediente,..."`) |
+| `DOWNLOAD_MODE` | `mojarra` (`mojarra` \| `link`) |
+| `DOWNLOAD_SIGNATURE` | `mojarra\.jsfcljs` |
+| `DOWNLOAD_PARAM_KEY` | `param_uuid` |
+| `DOWNLOAD_LINK_SELECTOR` | `a[href$='.pdf']` (modo `link`) |
+| `DOWNLOAD_LINK_ATTR` | `href` (modo `link`) |
+| `MAX_PAGES` / `ROWS_PER_PAGE` | `3` / `10` |
 | `COURTESY_DELAY_MS` | `1500` |
 | `MAX_RETRIES` / `BACKOFF_MS` / `MAX_BACKOFF_MS` | `3` / `1500` / `60000` |
 | `TIMEOUT_MS` | `30000` |

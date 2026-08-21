@@ -68,6 +68,69 @@ export interface SearchResult {
 export type ScraperMode = "jsf" | "static" | "dspace";
 
 /**
+ * Sitios soportados. Se selecciona con la variable `SCRAPER_SITE`; cada uno
+ * tiene un perfil de datos (URLs, campos JSF, selectores, mapeo de columnas
+ * y mecanismo de descarga) definido en `SITE_PROFILES` (config.ts). Añadir
+ * un sitio nuevo es agregar una entrada al mapa, sin tocar el código.
+ */
+export type ScraperSite = "oefa" | "pj";
+
+/**
+ * Mapeo de columnas de la tabla: posición (índice 0-based) → campo de
+ * `DocumentoOefa`. `null` descarta la columna. Es data, por sitio, para no
+ * hardcodear el orden de columnas en el parser.
+ *
+ * @example ["numero","nroExpediente","administrado","unidadFiscalizable","sector","nroResolucionApelacion"]
+ */
+export type ColumnMapping = Array<keyof DocumentoOefa | null>;
+
+/** Mecanismo de descarga de PDF por fila. */
+export type DownloadMode = "mojarra" | "link";
+
+/**
+ * Perfil de un sitio: agrupa toda la configuración dependiente del sitio
+ * (URLs, campos JSF, selectores, mapeo de columnas y descarga). Es pura
+ * data; cambiar de sitio es elegir un perfil, no editar el código.
+ */
+export interface SiteProfile {
+  urls: {
+    baseUrl: string;
+    startUrl: string;
+    searchPath: string;
+  };
+  search: {
+    inputName: string;
+    buttonName: string;
+  };
+  primeFaces: {
+    formSelector: string;
+    tableSelector: string;
+    rowSelector: string;
+    rowsPerPage: number;
+    columns: ColumnMapping;
+    download: DownloadConfig;
+  };
+}
+
+/**
+ * Configuración del mecanismo de descarga de PDF, específica por sitio.
+ * - `mojarra`: botón con `onclick="mojarra.jsfcljs(...)"` que dispara un POST
+ *   del formulario completo; requiere un token (`paramKey`, p.ej. param_uuid).
+ * - `link`: un `<a href="...">` directo al PDF en cada fila.
+ */
+export interface DownloadConfig {
+  mode: DownloadMode;
+  /** Regex (como string) que identifica el botón mojarra dentro del `onclick`. */
+  signature: string;
+  /** Clave del token que el servidor exige reenviar en el POST (mojarra). */
+  paramKey: string;
+  /** Selector del enlace al PDF (solo modo `link`). */
+  linkSelector?: string;
+  /** Atributo de la URL en el enlace (solo modo `link`, por defecto `href`). */
+  linkAttr?: string;
+}
+
+/**
  * Contrato Strategy. Cada mecanismo de extracción lo implementa, de modo
  * que el caso de uso (`OefaRepositoryScraper`) depende de esta abstracción
  * y no de implementaciones concretas (Principio de Inversión de
@@ -103,6 +166,8 @@ export interface StaticSelectors {
 
 /** Configuración completa del scraper, resuelta en la capa de composición. */
 export interface ScraperConfig {
+  /** Sitio activo (seleccionado por `SCRAPER_SITE`). */
+  site: ScraperSite;
   mode: ScraperMode;
   urls: ScraperUrls;
   search: {
@@ -130,10 +195,14 @@ export interface ScraperConfig {
   primeFaces: {
     formSelector: string;
     tableSelector: string;
-    /** Selector de filas de datos de la tabla TFA (`tr.ui-widget-content`). */
+    /** Selector de filas de datos de la tabla (`tr.ui-widget-content`). */
     rowSelector: string;
     rowsPerPage: number;
     maxPages: number;
+    /** Mapeo de columnas índice→campo, por sitio (data-driven). */
+    columns: ColumnMapping;
+    /** Mecanismo de descarga de PDF por fila, por sitio. */
+    download: DownloadConfig;
   };
   selectors: StaticSelectors;
 }
@@ -200,10 +269,12 @@ export interface ParsedTablePage {
  * `param_uuid` único por fila que el servidor exige para devolver el PDF.
  */
 export interface DownloadButton {
-  /** Client ID del botón (`form:dt:{fila}:j_idtXX`). */
+  /** Client ID del botón (`form:dt:{fila}:j_idtXX`). Modo `mojarra`. */
   id: string;
-  /** Token `param_uuid` que debe reenviarse en el POST de descarga. */
+  /** Token `param_uuid` que debe reenviarse en el POST de descarga. Modo `mojarra`. */
   paramUuid: string;
+  /** URL directa al PDF cuando la descarga es un enlace. Modo `link`. */
+  href?: string;
 }
 
 /**

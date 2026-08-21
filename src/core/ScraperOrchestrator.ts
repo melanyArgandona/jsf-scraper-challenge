@@ -65,7 +65,9 @@ export class ScraperOrchestrator {
       let parsed = this.parser.parseTablePage(
         page.html,
         this.config.primeFaces.tableSelector,
-        this.config.primeFaces.rowSelector
+        this.config.primeFaces.rowSelector,
+        this.config.primeFaces.columns,
+        this.config.primeFaces.download
       );
 
       // El sitio del TFA inicia con la tabla vacía y solo llena filas tras
@@ -83,7 +85,9 @@ export class ScraperOrchestrator {
         parsed = this.parser.parseTablePage(
           page.html,
           this.config.primeFaces.tableSelector,
-          this.config.primeFaces.rowSelector
+          this.config.primeFaces.rowSelector,
+          this.config.primeFaces.columns,
+          this.config.primeFaces.download
         );
       }
 
@@ -143,9 +147,15 @@ export class ScraperOrchestrator {
       .trim();
     const fileName = `${sanitizeFileName(baseName || documento.id)}.pdf`;
 
-    const result = await this.pdfDownloader.download(documento, fileName, () =>
-      this.primeFaces.downloadRow(page, downloadButton.id, downloadButton.paramUuid)
-    );
+    const result = await this.pdfDownloader.download(documento, fileName, () => {
+      if (downloadButton.href) {
+        // Modo "link": el PDF ya es una URL directa; se descarga por GET.
+        return this.primeFaces.streamUrl(downloadButton.href);
+      }
+      // Modo "mojarra": POST de formulario completo con el client ID y el
+      // token `param_uuid` de la fila.
+      return this.primeFaces.downloadRow(page, downloadButton.id, downloadButton.paramUuid);
+    });
 
     if (result) {
       documento.pdfPath = result.filePath;
