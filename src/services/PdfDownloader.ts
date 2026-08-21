@@ -5,7 +5,7 @@ import { pipeline } from "node:stream/promises";
 import { AxiosError, AxiosResponse } from "axios";
 import { delay } from "../shared/delay";
 import { toErrorMessage } from "../shared/error";
-import { DocumentoOefa, DownloadResult, FailedDownload, ScraperConfig } from "../types";
+import { DocumentoOefa, DocumentoPj, DownloadResult, FailedDownload, ScraperConfig } from "../types";
 import { HttpClient } from "./HttpClient";
 
 /**
@@ -41,7 +41,7 @@ export class PdfDownloader {
    * registra la ruta local en `documento.pdfPath`.
    */
   async download(
-    documento: DocumentoOefa,
+    documento: DocumentoOefa | DocumentoPj,
     fileName: string,
     responseProducer: () => Promise<AxiosResponse>
   ): Promise<DownloadResult | undefined> {

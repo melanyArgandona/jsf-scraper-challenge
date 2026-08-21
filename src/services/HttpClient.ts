@@ -2,11 +2,13 @@ import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from "axios";
 import { wrapper } from "axios-cookiejar-support";
 import { CookieJar } from "tough-cookie";
 import { decodeText } from "../shared/text";
+import { WafBlockedError } from "../shared/error";
 import { HttpTextResponse, JsfSessionState, PrimeFacesPostOptions } from "../types";
 
 /**
- * Cabeceras conservadoras que imitan a un navegador real para evitar
- * bloqueos por firma HTTP inusual.
+ * Cabeceras conservadoras que imitan a un navegador real (incluye las
+ * cabeceras `sec-fetch-*` / `sec-ch-ua*` que el WAF de algunos sitios
+ * exige para no responder 403 a clientes no navegador).
  */
 const BROWSER_HEADERS: Record<string, string> = {
   "User-Agent":
@@ -15,7 +17,15 @@ const BROWSER_HEADERS: Record<string, string> = {
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
   "Accept-Language": "es-PE,es;q=0.9,en;q=0.7",
   "Accept-Encoding": "gzip, deflate, br",
-  Connection: "keep-alive"
+  Connection: "keep-alive",
+  "Upgrade-Insecure-Requests": "1",
+  "sec-fetch-site": "none",
+  "sec-fetch-mode": "navigate",
+  "sec-fetch-user": "?1",
+  "sec-fetch-dest": "document",
+  "sec-ch-ua": '"Chromium";v="126", "Google Chrome";v="126", "Not?A_Brand";v="24"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"Windows"'
 };
 
 /**
@@ -33,7 +43,9 @@ export class HttpClient {
 
   constructor(
     private readonly baseUrl: string,
-    timeoutMs = 30000
+    timeoutMs = 30000,
+    extraHeaders: Record<string, string> = {},
+    extraCookies: string = ""
   ) {
     /*
      * Nota de tipado: la definición de tipos de axios-cookiejar-support v7
@@ -47,10 +59,15 @@ export class HttpClient {
       jar: this.jar,
       timeout: timeoutMs,
       maxRedirects: 5,
-      headers: BROWSER_HEADERS
+      headers: { ...BROWSER_HEADERS, ...extraHeaders }
     } as unknown as AxiosRequestConfig;
 
     this.client = wrapper(axios.create(axiosConfig) as never) as unknown as AxiosInstance;
+
+    // Inyecta cookies de sesión capturadas (p.ej. JSESSIONID) para bypasear WAF.
+    if (extraCookies.trim() !== "") {
+      this.jar.setCookieSync(extraCookies, baseUrl);
+    }
   }
 
   /**
@@ -72,8 +89,23 @@ export class HttpClient {
 
     return {
       finalUrl: this.extractFinalUrl(url, response),
-      html: decodeText(response.data)
+      html: this.assertNotWaf(decodeText(response.data))
     };
+  }
+
+  /**
+   * Lanza `WafBlockedError` si el HTML es la página de bloqueo 403 del WAF
+   * (Server: rdwr / "Transaction ID"), para no seguir reintentando ciego.
+   */
+  private assertNotWaf(html: string): string {
+    if (/403 Forbidden/i.test(html) && /Transaction ID/i.test(html)) {
+      throw new WafBlockedError(
+        "El sitio respondió 403 (WAF) a un cliente no navegador. " +
+          "Captura tu cookie de sesión en el navegador y pásala en EXTRA_COOKIES " +
+          "(p.ej. EXTRA_COOKIES=\"JSESSIONID=...\")."
+      );
+    }
+    return html;
   }
 
   /**
@@ -92,7 +124,7 @@ export class HttpClient {
 
     return {
       finalUrl: this.extractFinalUrl(url, response),
-      html: decodeText(response.data)
+      html: this.assertNotWaf(decodeText(response.data))
     };
   }
 
@@ -134,7 +166,7 @@ export class HttpClient {
 
     return {
       finalUrl: this.extractFinalUrl(options.actionUrl, response),
-      html: decodeText(response.data)
+      html: this.assertNotWaf(decodeText(response.data))
     };
   }
 

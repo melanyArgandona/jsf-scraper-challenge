@@ -1,10 +1,15 @@
 import * as cheerio from "cheerio";
+import type { Cheerio, CheerioAPI } from "cheerio";
+import type { AnyNode } from "domhandler";
 import {
   ColumnMapping,
   DocumentoOefa,
+  DocumentoPj,
   DownloadButton,
   DownloadConfig,
+  ParsedCardsPage,
   ParsedTablePage,
+  PjProfile,
   SearchResult,
   StaticSelectors
 } from "../types";
@@ -112,6 +117,88 @@ export class HtmlParser {
     });
 
     return documentos;
+  }
+
+  /**
+   * Parsea la página de resultados del PJ (layout de tarjetas). Extrae cada
+   * `DocumentoPj` del `cardSelector` del perfil y calcula el client ID del
+   * botón "Ver Resolución" por índice (`buttonIdTemplate` con `${index}`).
+   */
+  parseCardsPage(html: string, pj: PjProfile): ParsedCardsPage {
+    const documentos = this.parseCards(html, pj);
+    const downloadButtons = this.extractPjButtons(pj, documentos.length);
+    const viewState = this.extractViewState(html);
+    const page: ParsedCardsPage = { documentos, downloadButtons };
+    if (viewState) page.viewState = viewState;
+    page.paginatorId = this.extractPaginatorId(html) ?? pj.tableId;
+    return page;
+  }
+
+  /**
+   * Extrae las tarjetas del PJ. Cada tarjeta es un bloque clave-valor: para
+   * cada campo del `fieldMap` busca la etiqueta por texto y toma el valor del
+   * elemento hermano siguiente (o del siguiente del padre).
+   */
+  private parseCards(html: string, pj: PjProfile): DocumentoPj[] {
+    const $ = cheerio.load(html);
+    let cards = $(pj.cardSelector);
+    if (cards.length === 0) {
+      // Fallback: contenedores típicos de PrimeFaces.
+      cards = $("div.ui-panel, div.ui-g, div.ui-panelgrid");
+    }
+
+    const documentos: DocumentoPj[] = [];
+    cards.each((index, card) => {
+      const node = $(card);
+      const doc: DocumentoPj = {
+        id: String(index),
+        tipoExpediente: "",
+        nroExpediente: "",
+        pretensionDelito: "",
+        tiporesolucion: "",
+        fechaResolucion: "",
+        salaSuprema: ""
+      };
+
+      for (const [label, field] of Object.entries(pj.fieldMap)) {
+        const value = this.extractFieldByLabel(node, label, $);
+        if (value) {
+          (doc as unknown as Record<string, string>)[field] = value;
+        }
+      }
+
+      documentos.push(doc);
+    });
+
+    return documentos;
+  }
+
+  /** Busca una etiqueta por texto dentro de la tarjeta y devuelve su valor. */
+  private extractFieldByLabel(node: Cheerio<AnyNode>, label: string, $: CheerioAPI): string {
+    const target = label.trim().toLowerCase();
+    let value = "";
+
+    node.find("*").each((_: unknown, element: AnyNode) => {
+      const text = $(element).text().replace(/\s+/g, " ").trim().toLowerCase();
+      if (value !== "") return;
+      if (text === target || text.startsWith(`${target}:`)) {
+        const next = $(element).next();
+        const candidate = next.length > 0 ? next.text() : $(element).parent().next().text();
+        const cleaned = normalize(candidate);
+        if (cleaned !== "") value = cleaned;
+      }
+    });
+
+    return value;
+  }
+
+  /** Calcula el client ID del botón de descarga por índice de tarjeta. */
+  private extractPjButtons(pj: PjProfile, count: number): DownloadButton[] {
+    const buttons: DownloadButton[] = [];
+    for (let i = 0; i < count; i += 1) {
+      buttons.push({ id: pj.buttonIdTemplate.replace("${index}", String(i)), paramUuid: "" });
+    }
+    return buttons;
   }
 
   /**

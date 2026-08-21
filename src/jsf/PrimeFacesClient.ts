@@ -117,9 +117,12 @@ export class PrimeFacesClient {
     const body: Record<string, string> = {
       [page.formId]: page.formId,
       "javax.faces.ViewState": page.viewState,
-      [downloadButtonId]: downloadButtonId,
-      param_uuid: paramUuid
+      [downloadButtonId]: downloadButtonId
     };
+    // Solo los sitios mojarra exigen el token param_uuid en el POST.
+    if (paramUuid.trim() !== "") {
+      body.param_uuid = paramUuid;
+    }
 
     return this.http.postStream(page.actionUrl, body, {
       "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",

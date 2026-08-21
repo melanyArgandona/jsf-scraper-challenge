@@ -1,143 +1,161 @@
-# Scraper Challenge - JSF/PrimeFaces sin navegador
+# Scraper Challenge — JSF/PrimeFaces sin navegador (TypeScript)
 
-Solucion TypeScript, tipado estricto, para extraer la tabla de resoluciones del **Tribunal de Fiscalización Ambiental (TFA)** de la OEFA — y sitios con arquitectura JavaServer Faces + PrimeFaces — **sin** Puppeteer, Playwright ni Selenium. La extraccion se hace con HTTP directo, cookies, `javax.faces.ViewState`, formularios JSF y respuestas parciales AJAX de PrimeFaces.
+Scraper en **TypeScript** de tipado estricto para extraer resoluciones de
+sitios **JavaServer Faces + PrimeFaces** — **sin** Puppeteer, Playwright ni
+Selenium (solo `axios` + `cheerio`). El sitio objetivo del reto es la
+**Jurisprudencia del Poder Judicial**:
 
-La tabla TFA se mapea columna a columna en `DocumentoOefa`:
+> `https://jurisprudencia.pj.gob.pe/jurisprudenciaweb/faces/page/resultado.xhtml`
 
-| Columna | Campo |
-| --- | --- |
-| 1 Nro. | `numero` |
-| 2 Nro. Expediente | `nroExpediente` |
-| 3 Administrado | `administrado` |
-| 4 Unidad Fiscalizable | `unidadFiscalizable` |
-| 5 Sector | `sector` |
-| 6 Nro. Resolucion de Apelacion | `nroResolucionApelacion` |
+También incluye un perfil secundario para el **TFA de la OEFA** (tabla de
+columnas). Conmutar entre sitios es solo cuestión de una variable de entorno
+(`SCRAPER_SITE`), sin tocar el código.
 
-El `id` de cada fila (0, 1, 2, ...) se usa como indice relacional en el POST de PrimeFaces que simula la descarga del PDF; la ruta local resultante se guarda en `pdfPath`.
+## Sitios (perfiles)
 
-## Instalacion
+Cada sitio es un **perfil de datos** (`SITE_PROFILES` en `src/config.ts`):
+URLs, campos JSF, selectores, mapeo de columnas/tarjetas y mecanismo de
+descarga. Cualquier valor se sobreescribe por variable de entorno.
+
+| `SCRAPER_SITE` | Sitio | Layout |
+| --- | --- | --- |
+| `pj` | Jurisprudencia PJ (`jurisprudencia.pj.gob.pe`) | **Tarjetas** (`DocumentoPj`) |
+| `oefa` (defecto) | TFA de la OEFA (`publico.oefa.gob.pe/repdig/consulta/consultaTfa.xhtml`) | Tabla de columnas (`DocumentoOefa`) |
+
+```bash
+# Jurisprudencia PJ (sitio del reto)
+SCRAPER_SITE=pj npm run scrape -- "casacion" --max-pages=2
+
+# TFA de OEFA (perfil secundario)
+SCRAPER_SITE=oefa npm run scrape -- "mineria" --max-pages=2
+```
+
+## ⚠️ El sitio PJ bloquea clientes no navegador (WAF 403)
+
+`jurisprudencia.pj.gob.pe` responde **403 Forbidden** (WAF `Server: rdwr`) a
+cualquier cliente HTTP plano, aunque le pasemos cabeceras de Chrome completas.
+Para sortearlo **sin automatizar un navegador**, el scraper inyecta una
+**cookie de sesión capturada** en tu navegador:
+
+1. Abre `resultado.xhtml` en el navegador (debe cargar normalmente).
+2. DevTools → Application → Cookies → copia la cookie de sesión
+   (p.ej. `JSESSIONID` u otra que el sitio use).
+3. Pásala en `EXTRA_COOKIES` (o en tu `.env`):
+
+```bash
+EXTRA_COOKIES="JSESSIONID=abc123..." SCRAPER_SITE=pj npm run scrape -- "casacion"
+```
+
+Si el sitio sigue respondiendo 403, el scraper lanza `WafBlockedError` con
+este mismo mensaje en lugar de reintentar a ciegas. Cabeceras extra
+(`EXTRA_HEADERS`, JSON) también se pueden inyectar.
+
+> Nota: el WAF puede exigir un reto JS en algunos despliegues; en ese caso un
+> cliente HTTP plano no basta y la única vía dentro de las reglas del reto sería
+> capturar la cookie tras el reto en el navegador (como se describió arriba).
+
+## Instalación y configuración (`.env`)
 
 ```bash
 npm install
+cp .env.example .env   # edita .env con tus valores (NO se sube al repo)
 ```
+
+El `.env` carga automáticamente (`dotenv`). Variables clave: `SCRAPER_SITE`,
+`EXTRA_COOKIES`, `MAX_RETRIES`, `BACKOFF_MS`, `COURTESY_DELAY_MS`,
+`FAILURES_PATH`. Ver tabla al final.
 
 ## Uso
 
-El termino de busqueda se pasa como argumento posicional y se combina con flags `--clave=valor`:
+El término de búsqueda es un argumento posicional; flags `--clave=valor`:
 
 ```bash
 npm run scrape -- "evaluacion ambiental" --max-pages=2
 npm run scrape -- "mineria" --mode=dspace --max-pages=1 --rows-per-page=10
-npm run scrape -- "agua" --mode=static --max-pages=3
+SCRAPER_SITE=pj EXTRA_COOKIES="JSESSIONID=..." npm run scrape -- "casacion" --max-pages=3
 ```
 
-Si no se pasa termino, se recorre el listado del repositorio (modo `jsf`).
+### Reintentar fallidos (`--resume`)
 
-### Modos
-
-| Modo | Mecanismo | Uso tipico |
-| --- | --- | --- |
-| `jsf` | POST AJAX PrimeFaces con `javax.faces.ViewState` y paginacion `_first`/`_rows` | Sitios JSF/PrimeFaces |
-| `static` | HTML navegable + enlaces "next" | Sitios con paginacion HTML |
-| `dspace` | API REST publica de DSpace 7 (`/server/api/discover/search/objects`) | Repositorio OEFA publico actual (DSpace/Angular) |
-
-### Sitios (perfiles)
-
-El scraper conmuta entre sitios con la variable `SCRAPER_SITE`, sin tocar
-codigo. Cada sitio es un **perfil de datos** (`SITE_PROFILES` en `src/config.ts`)
-con sus URLs, campos JSF, selectores, mapeo de columnas y mecanismo de
-descarga. Cualquier valor del perfil puede sobreescribirse por variable de
-entorno.
-
-| `SCRAPER_SITE` | Sitio |
-| --- | --- |
-| `oefa` (defecto) | TFA de la OEFA — `publico.oefa.gob.pe/repdig/consulta/consultaTfa.xhtml` |
-| `pj` | Jurisprudencia PJ — `jurisprudencia.pj.gob.pe/.../resultado.xhtml` |
+Los PDFs que fallan se registran en `FAILURES_PATH` (`output/fallidas.json`).
+Para reintentarlos, re-ejecuta el mismo comando con `--resume`: los PDF ya
+descargados se **omitenn** (skip por archivo existente) y solo se reintentan
+los faltantes (incluye los que fallaron por 429).
 
 ```bash
-# Sitio OEFA (defecto)
-npm run scrape -- "mineria" --max-pages=2
-
-# Sitio PJ
-SCRAPER_SITE=pj npm run scrape -- "casacion" --max-pages=2
+SCRAPER_SITE=pj EXTRA_COOKIES="..." npm run scrape -- "casacion" --resume
 ```
 
-> Nota: `jurisprudencia.pj.gob.pe` aplica proteccion anti-bot (responde 403 a
-> clientes no navegador), por lo que el perfil `pj` es un punto de partida: su
-> `COLUMNS` y mecanismo de descarga deben ajustarse inspeccionando el DOM real
-> de la pagina (ver variables `COLUMNS`, `DOWNLOAD_*`).
+## Manejo robusto de errores 429
 
-Salidas generadas:
+`PdfDownloader` reintenta con **backoff exponencial + jitter** y respeta la
+cabecera `Retry-After` del servidor ante:
 
-- `output/documentos-oefa.json`: consolidado de la tabla del TFA (`DocumentoOefa[]`) con las columnas exactas (`numero`, `nroExpediente`, `administrado`, `unidadFiscalizable`, `sector`, `nroResolucionApelacion`, `pdfPath`). Para el modo `jsf`.
-- `output/resultados-oefa.json`: resultados normalizados (`SearchResult`) de los modos `static`/`dspace`. Cada registro incluye ademas las columnas de la tabla TFA (`numero`, `nroExpediente`, `administrado`, `unidadFiscalizable`, `sector`, `nroResolucionApelacion`) derivadas de sus metadatos (materias, titulo y resumen), dejando vacio lo que no aplica.
-- `output/pdfs/`: PDFs descargados por streaming.
+- **429** Too Many Requests (rate limit),
+- **5xx** (500/502/503/504) y
+- **errores de red/timeout** (transitorios).
+
+Si agota los reintentos (`MAX_RETRIES`), registra el fallo y **continúa con el
+siguiente documento**; no aborta el scrapeo.
+
+## Salidas
+
+- `output/documentos-oefa.json` (OEFA) / `output/resultados-*.json` (PJ):
+  consolidado con `pdfPath` por documento.
+- `output/pdfs/`: PDFs descargados por streaming (sin cargar en memoria).
+- `output/fallidas.json`: registro de descargas fallidas para `--resume`.
 
 ## Arquitectura
 
-Capas separadas (Red / JSF / Parsing / Almacenamiento / Orquestacion / Estrategias):
+Capas separadas (Red / JSF / Parsing / Almacenamiento / Orquestación / Estrategias):
 
-- `src/types/index.ts`: unica fuente de las interfaces de dominio (`DocumentoOefa`, `SearchResult`, `ScraperConfig`, `JsfPage`, DTOs de DSpace, etc.).
-- `src/config.ts`: composition root; resuelve configuracion por entorno + CLI (`resolveScraperConfig`, `parseCliArgs`).
-- `src/http/index.ts`: fachada de red (re-exporta la implementacion).
-- `src/services/HttpClient.ts`: boundary de red con `axios-cookiejar-support` + `tough-cookie` (persistencia automatica del `JSESSIONID`), cabeceras realistas, POST AJAX PrimeFaces y stream para PDFs. Decodifica respuestas UTF-8/latin1 de forma defensiva.
-- `src/services/HtmlParser.ts`: parsing DOM con Cheerio: filas `<tr>`→`DocumentoOefa`, ViewState (HTML y XML parcial), paginador PrimeFaces, enlaces PDF.
-- `src/services/PdfDownloader.ts`: descarga por `fs.createWriteStream` (sin OOM), reintentos con **backoff exponencial + jitter** y respeto de la cabecera `Retry-After` ante HTTP 429, 5xx y errores de red; registro de fallas y continuacion con el siguiente documento; sanitizacion de nombres; reutilizacion de archivos ya descargados.
-- `src/jsf/PrimeFacesClient.ts`: protocolo JSF/PrimeFaces: sesion inicial, POST de busqueda y paginacion manteniendo el ViewState vigente y fusionando `<update>`.
-- `src/core/ScraperOrchestrator.ts`: cerebro del flujo JSF: sesion (GET), bucle de paginacion, tasa de cortesia (1.5s configurable), persistencia JSON ordenada.
+- `src/types/index.ts`: interfaces de dominio (`DocumentoOefa`, `DocumentoPj`, `SearchResult`, `ScraperConfig`, `SiteProfile`, `PjProfile`, …).
+- `src/config.ts`: composition root; resuelve la configuración por perfil + entorno + CLI. Define `SITE_PROFILES`.
+- `src/services/HttpClient.ts`: boundary de red (`axios-cookiejar-support` + `tough-cookie`), cabeceras de navegador completas, inyección de `EXTRA_HEADERS`/`EXTRA_COOKIES`, y detección de WAF (403).
+- `src/services/HtmlParser.ts`: parsing con Cheerio. Tabla OEFA → `DocumentoOefa` (mapeo de columnas configurable) y tarjetas PJ → `DocumentoPj` (clave→valor por proximidad de texto); botón "Ver Resolución" con `id` calculado por índice.
+- `src/services/PdfDownloader.ts`: descarga por `fs.createWriteStream`, reintentos 429/5xx/red con backoff+jitter+Retry-After, registro de fallas, nombres descriptivos, reutilización de archivos.
+- `src/jsf/PrimeFacesClient.ts`: protocolo JSF/PrimeFaces (sesión, búsqueda, paginación, descarga).
+- `src/core/ScraperOrchestrator.ts`: orquesta sesión, paginación y descargas; ramifica OEFA (tabla) / PJ (tarjetas).
 - `src/scraper/`: capa Strategy/Factory/Decorator.
-  - `SearchStrategyFactory.ts`: factory que selecciona la estrategia por modo.
-  - `JsfPrimeFacesSearchStrategy.ts` / `StaticHtmlSearchStrategy.ts` / `DspaceRepositoryClient.ts`: estrategias concretas.
-  - `HydratingSearchStrategy.ts`: decorator que completa enlaces de descarga sin modificar las estrategias base.
-  - `OefaRepositoryScraper.ts`: caso de uso principal; no conoce HTTP/JSF/DSpace/parsing.
-- `src/shared/`: utilidades (`delay`, `persistJson`, `toErrorMessage`, `decodeText`).
+- `src/shared/`: utilidades (`delay`, `persistJson`, `toErrorMessage`/`WafBlockedError`, `decodeText`).
 
-## Diseno
+## Por qué no usa navegador
 
-- `SOLID`: Single Responsibility (cada capa solo hace una cosa), Open/Closed (nuevos modos agregan estrategias sin tocar el caso de uso), Dependecy Inversion (el caso de uso depende de `SearchStrategy`, no de implementaciones).
-- Patrones: `Strategy`, `Factory` (`SearchStrategyFactory`), `Decorator` (`HydratingSearchStrategy`), inyeccion de dependencias manual en `src/index.ts`.
-- Tipado estricto: `strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, `noUnusedLocals`, `noImplicitOverride`.
+JSF mantiene estado en `javax.faces.ViewState`; PrimeFaces usa AJAX parcial
+(`Faces-Request: partial/ajax`, respuestas `<partial-response>`). El scraper
+replica esos intercambios: GET inicial + cookie `JSESSIONID`, POST de búsqueda
+con ViewState, paginación con `_first`/`_rows`, y descarga del PDF por POST del
+formulario (mojarra) o enlace directo (`link`).
 
-## Por que no usa navegador
+## Configuración (variables de entorno)
 
-JSF mantiene estado en campos ocultos, especialmente `javax.faces.ViewState`. PrimeFaces agrega AJAX parcial (`javax.faces.partial.ajax`, `javax.faces.source`, `javax.faces.partial.execute/render`, cabecera `Faces-Request: partial/ajax`, respuesta XML `<partial-response>`). El scraper replica esos intercambios:
+| Variable | Por defecto | Nota |
+| --- | --- | --- |
+| `SCRAPER_SITE` | `oefa` | `oefa` \| `pj` |
+| `BASE_URL` / `OEFA_BASE_URL` | según perfil | override de URL base |
+| `START_URL` / `OEFA_START_URL` | según perfil | URL de la página de resultado |
+| `SEARCH_PATH` | según perfil | |
+| `JSF_SEARCH_INPUT` / `JSF_SEARCH_BUTTON` | `form:txtSearch` / `form:btnSearch` (OEFA); `formBusqueda:txtBusqueda` / `formBusqueda:btnBuscar` (PJ) | |
+| `COLUMNS` | mapeo del perfil OEFA | `"numero,nroExpediente,..."` |
+| `DOWNLOAD_MODE` | `mojarra` | `mojarra` \| `link` |
+| `DOWNLOAD_SIGNATURE` / `DOWNLOAD_PARAM_KEY` | `mojarra\.jsfcljs` / `param_uuid` | |
+| `DOWNLOAD_LINK_SELECTOR` / `DOWNLOAD_LINK_ATTR` | `a[href$='.pdf']` / `href` | modo `link` |
+| `PJ_CARD_SELECTOR` | `div.ui-panel` | contenedor de tarjeta PJ |
+| `PJ_BUTTON_TEXT` | `Ver Resolución` | texto del botón de descarga PJ |
+| `PJ_TABLE_ID` | `formBusqueda:tablaResultados` | id de tabla para paginación PJ |
+| `PJ_BUTTON_ID` | `formBusqueda:tablaResultados:${index}:btnVerResolucion` | id del botón por índice |
+| `EXTRA_HEADERS` | `{}` | JSON de cabeceras a inyectar |
+| `EXTRA_COOKIES` | `""` | cookie de sesión para bypasear WAF |
+| `MAX_RETRIES` / `BACKOFF_MS` / `MAX_BACKOFF_MS` | `3` / `1500` / `60000` | reintentos 429/5xx/red |
+| `COURTESY_DELAY_MS` | `1500` | tasa de cortesía entre requests |
+| `MAX_PAGES` / `ROWS_PER_PAGE` | `3` / `10` | |
+| `TIMEOUT_MS` | `30000` | |
+| `FAILURES_PATH` | `output/fallidas.json` | registro de fallidos (`--resume`) |
+| `OUTPUT_JSON` / `OUTPUT_RESULTS_JSON` / `PDF_DIR` | `output/...` | |
 
-1. `GET` de la pagina inicial y guarda cookies (`JSESSIONID`).
-2. Extrae formulario, campos ocultos y ViewState.
-3. `POST application/x-www-form-urlencoded` con el termino de busqueda y el ViewState vigente.
-4. Para paginar, envia el evento del paginador (`_first`/`_rows`) y fusiona los `<update>` recibidos.
-5. El ViewState se refresca de cada respuesta parcial antes del siguiente POST (un token vencido rompe la sesion).
-
-## Configuracion
-
-| Variable | Por defecto |
-| --- | --- |
-| `SCRAPER_SITE` | `oefa` (`oefa` \| `pj`) |
-| `BASE_URL` / `OEFA_BASE_URL` | segun perfil (`publico.oefa.gob.pe`) |
-| `START_URL` / `OEFA_START_URL` | segun perfil (URL de la pagina de resultado) |
-| `SEARCH_PATH` / `OEFA_SEARCH_PATH` | segun perfil (`""`) |
-| `SCRAPER_MODE` | `jsf` |
-| `JSF_FORM_SELECTOR` | `form` |
-| `OEFA_TABLE_SELECTOR` | `table` |
-| `JSF_ROW_SELECTOR` | `tr.ui-widget-content` |
-| `JSF_SEARCH_INPUT` | `form:txtSearch` |
-| `JSF_SEARCH_BUTTON` | `form:btnSearch` |
-| `COLUMNS` | mapeo de columnas del perfil (`"numero,nroExpediente,..."`) |
-| `DOWNLOAD_MODE` | `mojarra` (`mojarra` \| `link`) |
-| `DOWNLOAD_SIGNATURE` | `mojarra\.jsfcljs` |
-| `DOWNLOAD_PARAM_KEY` | `param_uuid` |
-| `DOWNLOAD_LINK_SELECTOR` | `a[href$='.pdf']` (modo `link`) |
-| `DOWNLOAD_LINK_ATTR` | `href` (modo `link`) |
-| `MAX_PAGES` / `ROWS_PER_PAGE` | `3` / `10` |
-| `COURTESY_DELAY_MS` | `1500` |
-| `MAX_RETRIES` / `BACKOFF_MS` / `MAX_BACKOFF_MS` | `3` / `1500` / `60000` |
-| `TIMEOUT_MS` | `30000` |
-| `OUTPUT_JSON` / `OUTPUT_RESULTS_JSON` / `PDF_DIR` | `output/...` |
-| `SELECTOR_RESULT` / `SELECTOR_DETAIL_LINK` / `SELECTOR_PDF_LINK` / `SELECTOR_NEXT` | selectores CSS adaptables |
-
-## Verificacion
+## Verificación
 
 ```bash
-npm run check
-npm run build
+npm run check   # tsc --noEmit
+npm run build   # compila a dist/
 ```

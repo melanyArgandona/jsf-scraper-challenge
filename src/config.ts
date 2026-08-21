@@ -19,6 +19,8 @@ export interface CliArgs {
   maxPages: number | undefined;
   rowsPerPage: number | undefined;
   courtesyDelayMs: number | undefined;
+  /** Reintenta solo los documentos fallidos registrados en `FAILURES_PATH`. */
+  resume: boolean;
 }
 
 /**
@@ -56,7 +58,8 @@ export function resolveScraperConfig(args: CliArgs): ScraperConfig {
     output: {
       jsonPath: process.env.OUTPUT_JSON ?? "output/documentos-oefa.json",
       pdfDirectory: process.env.PDF_DIR ?? "output/pdfs",
-      resultsJsonPath: process.env.OUTPUT_RESULTS_JSON ?? "output/resultados-oefa.json"
+      resultsJsonPath: process.env.OUTPUT_RESULTS_JSON ?? "output/resultados-oefa.json",
+      failuresPath: process.env.FAILURES_PATH ?? "output/fallidas.json"
     },
     delays: {
       courtesyDelayMs: args.courtesyDelayMs ?? parseIntEnv("COURTESY_DELAY_MS", 1500)
@@ -67,7 +70,9 @@ export function resolveScraperConfig(args: CliArgs): ScraperConfig {
       maxBackoffMs: parseIntEnv("MAX_BACKOFF_MS", 60000)
     },
     http: {
-      timeoutMs: parseIntEnv("TIMEOUT_MS", 30000)
+      timeoutMs: parseIntEnv("TIMEOUT_MS", 30000),
+      extraHeaders: parseJsonEnv("EXTRA_HEADERS", {}),
+      extraCookies: process.env.EXTRA_COOKIES ?? ""
     },
     primeFaces: {
       formSelector: process.env.JSF_FORM_SELECTOR ?? profile.primeFaces.formSelector,
@@ -100,6 +105,7 @@ export function resolveScraperConfig(args: CliArgs): ScraperConfig {
  */
 export const SITE_PROFILES: Record<ScraperSite, SiteProfile> = {
   oefa: {
+    kind: "table",
     urls: {
       baseUrl: "https://publico.oefa.gob.pe",
       startUrl: "https://publico.oefa.gob.pe/repdig/consulta/consultaTfa.xhtml",
@@ -130,6 +136,7 @@ export const SITE_PROFILES: Record<ScraperSite, SiteProfile> = {
     }
   },
   pj: {
+    kind: "cards",
     urls: {
       baseUrl: "https://jurisprudencia.pj.gob.pe",
       startUrl:
@@ -137,28 +144,42 @@ export const SITE_PROFILES: Record<ScraperSite, SiteProfile> = {
       searchPath: ""
     },
     search: {
-      inputName: "form:txtSearch",
-      buttonName: "form:btnSearch"
+      inputName: process.env.PJ_SEARCH_INPUT ?? "formBusqueda:txtBusqueda",
+      buttonName: process.env.PJ_SEARCH_BUTTON ?? "formBusqueda:btnBuscar"
     },
     primeFaces: {
       formSelector: "form",
       tableSelector: "table",
       rowSelector: "tr.ui-widget-content",
       rowsPerPage: 10,
-      // TODO: ajustar al DOM real del PJ tras inspeccionar la pagina.
-      columns: [
-        "numero",
-        "nroExpediente",
-        "administrado",
-        "unidadFiscalizable",
-        "sector",
-        "nroResolucionApelacion"
-      ],
+      columns: [],
       download: {
         mode: "mojarra",
         signature: "mojarra\\.jsfcljs",
         paramKey: "param_uuid"
       }
+    },
+    pj: {
+      cardSelector: process.env.PJ_CARD_SELECTOR ?? "div.ui-panel",
+      fieldMap: {
+        "tipo de expediente": "tipoExpediente",
+        "nro. de expediente": "nroExpediente",
+        "nro de expediente": "nroExpediente",
+        "pretensión/delito": "pretensionDelito",
+        "pretension/delito": "pretensionDelito",
+        "tipo resolución": "tiporesolucion",
+        "tipo resolucion": "tiporesolucion",
+        "fecha resolución": "fechaResolucion",
+        "fecha resolucion": "fechaResolucion",
+        "sala suprema": "salaSuprema",
+        "norma de derecho interno": "normaDerechoInterno",
+        sumilla: "sumilla",
+        "palabras clave": "palabrasClave"
+      },
+      buttonText: process.env.PJ_BUTTON_TEXT ?? "Ver Resolución",
+      buttonIdTemplate:
+        process.env.PJ_BUTTON_ID ?? "formBusqueda:tablaResultados:${index}:btnVerResolucion",
+      tableId: process.env.PJ_TABLE_ID ?? "formBusqueda:tablaResultados"
     }
   }
 };
@@ -226,7 +247,8 @@ export function parseCliArgs(argv: string[]): CliArgs {
     mode: parseMode(flags.get("mode")),
     maxPages: parseIntOptional(flags.get("max-pages")),
     rowsPerPage: parseIntOptional(flags.get("rows-per-page")),
-    courtesyDelayMs: parseIntOptional(flags.get("delay"))
+    courtesyDelayMs: parseIntOptional(flags.get("delay")),
+    resume: flags.has("resume")
   };
 }
 
@@ -238,6 +260,17 @@ const parseIntEnv = (name: string, fallback: number): number => {
   if (value === undefined || value === "") return fallback;
   const parsed = Number.parseInt(value, 10);
   return Number.isNaN(parsed) ? fallback : parsed;
+};
+
+/** Parsea un JSON de entorno (p.ej. EXTRA_HEADERS) con fallback seguro. */
+const parseJsonEnv = <T>(name: string, fallback: T): T => {
+  const value = process.env[name];
+  if (value === undefined || value === "") return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
 };
 
 const parseIntOptional = (value: string | undefined): number | undefined => {

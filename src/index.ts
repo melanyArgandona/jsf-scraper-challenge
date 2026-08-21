@@ -1,3 +1,5 @@
+import dotenv from "dotenv";
+import { readFile } from "node:fs/promises";
 import { parseCliArgs, resolveScraperConfig } from "./config";
 import { ScraperOrchestrator } from "./core/ScraperOrchestrator";
 import { PrimeFacesClient } from "./jsf/PrimeFacesClient";
@@ -6,8 +8,9 @@ import { SearchStrategyFactory } from "./scraper/SearchStrategyFactory";
 import { HtmlParser } from "./services/HtmlParser";
 import { HttpClient } from "./services/HttpClient";
 import { PdfDownloader } from "./services/PdfDownloader";
+import { persistJson } from "./shared/fs";
 import { toErrorMessage } from "./shared/error";
-import { DocumentoOefa, ScraperConfig } from "./types";
+import { DocumentoOefa, FailedDownload, ScraperConfig } from "./types";
 
 /**
  * Punto de entrada de la aplicación. Construye el grafo de dependencias
@@ -21,11 +24,17 @@ import { DocumentoOefa, ScraperConfig } from "./types";
  * - Modos `static`/`dspace`: repostorio genérico vía Strategy/Factory.
  */
 async function main(): Promise<void> {
+  dotenv.config();
   const args = parseCliArgs(process.argv.slice(2));
   const config = resolveScraperConfig(args);
 
   // Composición del grafo de dependencias (inyección de dependencias).
-  const httpClient = new HttpClient(config.urls.baseUrl, config.http.timeoutMs);
+  const httpClient = new HttpClient(
+    config.urls.baseUrl,
+    config.http.timeoutMs,
+    config.http.extraHeaders,
+    config.http.extraCookies
+  );
   const htmlParser = new HtmlParser();
   const pdfDownloader = new PdfDownloader(httpClient, config);
   const primeFacesClient = new PrimeFacesClient(
@@ -36,11 +45,45 @@ async function main(): Promise<void> {
   const orchestrator = new ScraperOrchestrator(config, htmlParser, primeFacesClient, pdfDownloader);
 
   if (config.mode === "jsf") {
-    await runTfaTable(config, orchestrator, pdfDownloader);
+    const ejecutar = (): Promise<void> =>
+      config.site === "pj"
+        ? runJurisprudenciaPj(config, orchestrator, pdfDownloader)
+        : runTfaTable(config, orchestrator, pdfDownloader);
+
+    if (args.resume) {
+      await runResume(config, pdfDownloader, ejecutar);
+      return;
+    }
+    await ejecutar();
     return;
   }
 
   await runGenericRepository(config, httpClient, htmlParser, orchestrator, pdfDownloader);
+}
+
+/**
+ * Modo `--resume`: re-ejecuta el flujo normal del sitio. Los PDF ya
+ * descargados se omiten (skip por archivo existente) y solo se reintentan los
+ * faltantes — es decir, los documentos que fallaron en la corrida anterior.
+ * El archivo de fallidos (`FAILURES_PATH`) queda registrado para auditoría.
+ */
+async function runResume(
+  config: ScraperConfig,
+  _pdfDownloader: PdfDownloader,
+  ejecutar: () => Promise<void>
+): Promise<void> {
+  let previos = 0;
+  try {
+    const raw = await readFile(config.output.failuresPath, "utf8");
+    previos = (JSON.parse(raw) as FailedDownload[]).length;
+  } catch {
+    previos = 0;
+  }
+
+  await ejecutar();
+  process.stderr.write(
+    `[resume] fallidos previos registrados: ${previos}. Se reintentaron los faltantes.\n`
+  );
 }
 
 /**
@@ -58,11 +101,46 @@ async function runTfaTable(
     config.primeFaces.maxPages
   );
 
+  // Registra los fallidos para poder reintentarlos luego (modo --resume).
+  await persistJson(config.output.failuresPath, pdfDownloader.getFailures());
+
   process.stdout.write(
     JSON.stringify(
       {
         mode: "jsf",
         tabla: "Tribunal de Fiscalizacion Ambiental (TFA)",
+        query: config.search.query,
+        registros: documentos.length,
+        output: config.output.jsonPath,
+        pdfDirectory: config.output.pdfDirectory,
+        fallasDeDescarga: pdfDownloader.getFailures(),
+        ejemploFila: documentos[0] ?? null
+      },
+      null,
+      2
+    ) + "\n"
+  );
+}
+
+/**
+ * Flujo del sitio de Jurisprudencia del Poder Judicial (PJ): extrae las
+ * tarjetas de resultados (`DocumentoPj[]`) y descarga las resoluciones por
+ * streaming. El consolidado se persiste en `config.output.jsonPath`.
+ */
+async function runJurisprudenciaPj(
+  config: ScraperConfig,
+  orchestrator: ScraperOrchestrator,
+  pdfDownloader: PdfDownloader
+): Promise<void> {
+  const documentos = await orchestrator.runPj(config.search.query, config.primeFaces.maxPages);
+
+  await persistJson(config.output.failuresPath, pdfDownloader.getFailures());
+
+  process.stdout.write(
+    JSON.stringify(
+      {
+        mode: "jsf",
+        sitio: "jurisprudencia.pj.gob.pe",
         query: config.search.query,
         registros: documentos.length,
         output: config.output.jsonPath,

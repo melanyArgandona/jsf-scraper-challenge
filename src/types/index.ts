@@ -93,6 +93,8 @@ export type DownloadMode = "mojarra" | "link";
  * data; cambiar de sitio es elegir un perfil, no editar el código.
  */
 export interface SiteProfile {
+  /** Mecanismo de extracción: tabla de columnas (OEFA) o tarjetas (PJ). */
+  kind: "table" | "cards";
   urls: {
     baseUrl: string;
     startUrl: string;
@@ -110,6 +112,8 @@ export interface SiteProfile {
     columns: ColumnMapping;
     download: DownloadConfig;
   };
+  /** Solo para `kind: "cards"` (PJ). */
+  pj?: PjProfile;
 }
 
 /**
@@ -177,7 +181,10 @@ export interface ScraperConfig {
     /** Client ID y name del botón de búsqueda JSF (`form:btnSearch`). */
     buttonName: string;
   };
-  output: ScraperOutput;
+  output: ScraperOutput & {
+    /** Ruta donde se persisten los fallidos para el modo `--resume`. */
+    failuresPath: string;
+  };
   delays: {
     /** Tasa de cortesía aplicada entre peticiones para mitigar rate limit. */
     courtesyDelayMs: number;
@@ -191,6 +198,10 @@ export interface ScraperConfig {
   };
   http: {
     timeoutMs: number;
+    /** Cabeceras extra inyectadas en cada request (ej. para bypasear WAF). */
+    extraHeaders: Record<string, string>;
+    /** Cookies de sesión inyectadas en el jar (ej. JSESSIONID capturada). */
+    extraCookies: string;
   };
   primeFaces: {
     formSelector: string;
@@ -318,4 +329,64 @@ export interface DspaceBitstreamsResponse {
       _links?: { content?: { href?: string } };
     }>;
   };
+}
+
+/**
+ * Documento extraído del sitio de Jurisprudencia del Poder Judicial (PJ).
+ *
+ * A diferencia de OEFA (tabla de columnas), el PJ presenta cada resultado
+ * como una **tarjeta** (bloque clave-valor). Los campos siguen el diseño de
+ * la ficha del PJ; `pdfPath` se completa tras descargar la resolución.
+ */
+export interface DocumentoPj {
+  /** Índice de la tarjeta en la página actual (0, 1, 2…). */
+  id: string;
+  /** Cabecera de la tarjeta: tipo de expediente (ej. "Casación"). */
+  tipoExpediente: string;
+  /** Cabecera de la tarjeta: número de expediente (ej. "020705-2025"). */
+  nroExpediente: string;
+  /** Campo: Pretensión/Delito (ej. Desnaturalización de Contrato). */
+  pretensionDelito: string;
+  /** Campo: Tipo Resolución (ej. Ejecutoria Suprema). */
+  tiporesolucion: string;
+  /** Campo: Fecha Resolución (ej. 17/07/2026). */
+  fechaResolucion: string;
+  /** Campo: Sala Suprema (ej. Segunda Sala de Derecho Constitucional). */
+  salaSuprema: string;
+  /** Campo: Norma de Derecho Interno (ej. Ley 29497). */
+  normaDerechoInterno?: string;
+  /** Campo: Sumilla. */
+  sumilla?: string;
+  /** Campo: Palabras Clave (ej. Pago de beneficios sociales). */
+  palabrasClave?: string;
+  /** Ruta local donde se guarda el PDF descargado. */
+  pdfPath?: string;
+}
+
+/** Resultado de parsear la página de tarjetas del PJ. */
+export interface ParsedCardsPage {
+  documentos: DocumentoPj[];
+  viewState?: string;
+  downloadButtons: DownloadButton[];
+  paginatorId?: string;
+}
+
+/** Perfil de extracción específico del layout de tarjetas del PJ. */
+export interface PjProfile {
+  /** Selector del contenedor de cada tarjeta (ej. `div.ui-panel`). */
+  cardSelector: string;
+  /**
+   * Mapa etiqueta-mostrada → campo de `DocumentoPj`. La etiqueta se busca por
+   * proximidad de texto dentro de la tarjeta (insensible a mayúsculas).
+   */
+  fieldMap: Record<string, keyof DocumentoPj>;
+  /** Texto visible del botón de descarga (ej. "Ver Resolución"). */
+  buttonText: string;
+  /**
+   * Plantilla del client ID del botón de descarga; `${index}` se reemplaza
+   * por la posición de la tarjeta (ej. `formBusqueda:tablaResultados:${index}:btnVerResolucion`).
+   */
+  buttonIdTemplate: string;
+  /** Client ID de la tabla PrimeFaces usado en la paginación. */
+  tableId: string;
 }
