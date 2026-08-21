@@ -8,6 +8,7 @@
     "check": "tsc --noEmit",
     "start": "node dist/index.js",
     "scrape": "npm run build --silent && node dist/index.js",
+    "scrape:debug": "npm run build --silent && DEBUG=1 node dist/index.js",
     "test": "tsx scripts/smoke.ts"
   },
   "keywords": [],

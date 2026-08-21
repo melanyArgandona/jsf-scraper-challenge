@@ -45,7 +45,7 @@ export class HtmlParser {
   ): ParsedTablePage {
     const page: ParsedTablePage = {
       documentos: this.parseDocumentos(html, tableSelector, rowSelector, columns),
-      downloadButtons: this.extractDownloadButtons(html, download)
+      downloadButtons: this.extractRowDownloadButtons(html, tableSelector, rowSelector, download)
     };
 
     const viewState = this.extractViewState(html);
@@ -202,6 +202,19 @@ export class HtmlParser {
   }
 
   /**
+   * Devuelve el HTML externo de la primera fila de datos (para depurar el
+   * control de descarga y el orden de columnas sin volcar toda la página).
+   */
+  debugFirstRowHtml(html: string, tableSelector?: string, rowSelector?: string): string {
+    const $ = cheerio.load(html);
+    const scope = tableSelector ? `${tableSelector} ` : "";
+    let rows = $(`${scope}${rowSelector ?? DEFAULT_ROW_SELECTOR}`);
+    if (rows.length === 0) rows = $("tr").filter(":has(td)");
+    const first = rows.first();
+    return first.length > 0 ? $.html(first) : "";
+  }
+
+  /**
    * Extrae el token de estado de JSF.
    *
    * En respuestas HTML completas vive como input oculto
@@ -245,6 +258,58 @@ export class HtmlParser {
   }
 
   /**
+   * Extrae el botón/enlace de descarga **por fila** (alineado 1:1 con
+   * `documentos`). No todos los resultados tienen descarga (p.ej.
+   * resoluciones confidenciales), por lo que el vector puede contener
+   * `undefined` en esas posiciones; el orquestador las omite. Escopo por fila
+   * para no desalinearse con el índice global de filas.
+   */
+  extractRowDownloadButtons(
+    html: string,
+    tableSelector?: string,
+    rowSelector?: string,
+    download?: DownloadConfig
+  ): (DownloadButton | undefined)[] {
+    const $ = cheerio.load(html);
+    const scope = tableSelector ? `${tableSelector} ` : "";
+    let rows = $(`${scope}${rowSelector ?? DEFAULT_ROW_SELECTOR}`);
+    if (rows.length === 0) rows = $("tr").filter(":has(td)");
+
+    const config: DownloadConfig =
+      download ?? { mode: "mojarra", signature: "mojarra\\.jsfcljs", paramKey: "param_uuid" };
+    const result: (DownloadButton | undefined)[] = [];
+
+    rows.each((_, row) => {
+      const node = $(row);
+      if (config.mode === "link") {
+        const linkSelector = config.linkSelector ?? "a[href$='.pdf']";
+        const linkAttr = config.linkAttr ?? "href";
+        const href = node.find(linkSelector).first().attr(linkAttr);
+        result.push(href ? { id: "", paramUuid: "", href } : undefined);
+        return;
+      }
+
+      const signature = new RegExp(config.signature);
+      const paramKey = config.paramKey;
+      let found: DownloadButton | undefined;
+      node.find("a[onclick], button[onclick]").each((__, element) => {
+        if (found) return;
+        const onclick = $(element).attr("onclick") ?? "";
+        if (!signature.test(onclick)) return;
+        const pairs = [...onclick.matchAll(/'([^']+)':'([^']*)'/g)].map((m) => [m[1] ?? "", m[2] ?? ""] as const);
+        const params: Record<string, string> = {};
+        for (const [key, value] of pairs) params[key] = value;
+        const id = pairs.find(([key]) => key !== paramKey)?.[0];
+        const paramUuid = params[paramKey];
+        if (id && paramUuid) found = { id, paramUuid, params };
+      });
+      result.push(found);
+    });
+
+    return result;
+  }
+
+  /**
    * Identifica los botones/enlaces de descarga de PDF según la configuración
    * del sitio (`download`):
    *
@@ -277,12 +342,17 @@ export class HtmlParser {
 
       // Dentro de `mojarra.jsfcljs(form, { 'a':'a', 'param_uuid':'uuid' }, '')`
       // se parsean los pares `'clave':'valor'` del objeto literal.
-      const pairs = [...onclick.matchAll(/'([^']+)':'([^']*)'/g)].map((m) => [m[1], m[2]] as const);
+      const pairs = [...onclick.matchAll(/'([^']+)':'([^']*)'/g)].map(
+        (m) => [m[1] ?? "", m[2] ?? ""] as const
+      );
+      const params: Record<string, string> = {};
+      for (const [key, value] of pairs) params[key] = value;
+
       const id = pairs.find(([key]) => key !== paramKey)?.[0];
-      const paramUuid = pairs.find(([key]) => key === paramKey)?.[1];
+      const paramUuid = params[paramKey];
 
       if (id && paramUuid) {
-        buttons.push({ id, paramUuid });
+        buttons.push({ id, paramUuid, params });
       }
     });
 

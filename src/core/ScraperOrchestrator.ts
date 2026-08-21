@@ -5,7 +5,7 @@ import { sanitizeFileName } from "../services/PdfDownloader";
 import { PrimeFacesClient } from "../jsf/PrimeFacesClient";
 import { SITE_PROFILES } from "../config";
 import { delay } from "../shared/delay";
-import { persistJson } from "../shared/fs";
+import { persistJson, persistRaw } from "../shared/fs";
 import {
   DocumentoOefa,
   DocumentoPj,
@@ -45,17 +45,21 @@ export class ScraperOrchestrator {
 
     // 1) Inicializa la sesión: GET con persistencia del JSESSIONID.
     let page = await this.primeFaces.startSession(this.config.urls.startUrl);
+    await this.debugDump("sesion", page.html);
 
     // 2) (Opcional) Ejecuta la búsqueda JSF antes de paginar.
+    const searchFields = this.buildSearchFields(query ?? "");
     let searched = Boolean(query?.trim());
     if (searched) {
       await delay(this.config.delays.courtesyDelayMs);
       page = await this.primeFaces.submitSearch(
         page,
-        query ?? "",
-        this.config.search.inputName,
-        this.config.search.buttonName
+        searchFields.term,
+        searchFields.inputName,
+        searchFields.buttonName,
+        searchFields.extraFields
       );
+      await this.debugDump("busqueda", page.html);
     }
 
     // Clave compuesta por índice de página para no colisionar los `id` de fila
@@ -85,9 +89,11 @@ export class ScraperOrchestrator {
         page = await this.primeFaces.submitSearch(
           page,
           query ?? "",
-          this.config.search.inputName,
-          this.config.search.buttonName
+          searchFields.inputName,
+          searchFields.buttonName,
+          searchFields.extraFields
         );
+        await this.debugDump("busqueda", page.html);
         searched = true;
         parsed = this.parser.parseTablePage(
           page.html,
@@ -99,6 +105,17 @@ export class ScraperOrchestrator {
       }
 
       if (parsed.paginatorId) rememberedPaginatorId = parsed.paginatorId;
+
+      if (this.config.debug && pageIndex === 0) {
+        await this.debugDump(
+          "fila",
+          this.parser.debugFirstRowHtml(
+            page.html,
+            this.config.primeFaces.tableSelector,
+            this.config.primeFaces.rowSelector
+          )
+        );
+      }
 
       for (let index = 0; index < parsed.documentos.length; index += 1) {
         const documento = parsed.documentos[index];
@@ -148,16 +165,20 @@ export class ScraperOrchestrator {
     }
 
     let page = await this.primeFaces.startSession(this.config.urls.startUrl);
+    await this.debugDump("sesion", page.html);
 
+    const searchFields = this.buildSearchFields(query ?? "");
     let searched = Boolean(query?.trim());
     if (searched) {
       await delay(this.config.delays.courtesyDelayMs);
       page = await this.primeFaces.submitSearch(
         page,
-        query ?? "",
-        this.config.search.inputName,
-        this.config.search.buttonName
+        searchFields.term,
+        searchFields.inputName,
+        searchFields.buttonName,
+        searchFields.extraFields
       );
+      await this.debugDump("busqueda", page.html);
     }
 
     const documentos = new Map<string, DocumentoPj>();
@@ -172,9 +193,11 @@ export class ScraperOrchestrator {
         page = await this.primeFaces.submitSearch(
           page,
           query ?? "",
-          this.config.search.inputName,
-          this.config.search.buttonName
+          searchFields.inputName,
+          searchFields.buttonName,
+          searchFields.extraFields
         );
+        await this.debugDump("busqueda", page.html);
         searched = true;
         parsed = this.parser.parseCardsPage(page.html, pj);
       }
@@ -215,6 +238,45 @@ export class ScraperOrchestrator {
   }
 
   /**
+   * Construye los campos del POST de búsqueda. Si el término coincide con un
+   * sector conocido de la TFA (p.ej. "mineria" → idsector=1), el valor se envía
+   * **solo** al select de sector (no al input de expediente, que filtraría a 0).
+   * Si no, se envía como texto libre en el input de expediente. Un término
+   * vacío no agrega filtros (el botón "Buscar" lista todos los registros).
+   */
+  private buildSearchFields(query: string): {
+    inputName: string;
+    buttonName: string;
+    term: string;
+    extraFields: Record<string, string>;
+  } {
+    const buttonName = this.config.search.buttonName;
+    const sectorField = this.config.primeFaces.sectorField;
+    const sectorMap = this.config.primeFaces.sectorMap;
+
+    if (query.trim() && sectorField && sectorMap) {
+      const code = sectorMap[query.trim().toLowerCase()];
+      if (code !== undefined) {
+        // Sector: el valor va al select; nada al input de expediente.
+        return { inputName: sectorField, buttonName, term: code, extraFields: {} };
+      }
+    }
+
+    return {
+      inputName: this.config.search.inputName,
+      buttonName,
+      term: query,
+      extraFields: {}
+    };
+  }
+
+  /** Vuelca HTML crudo de diagnóstico cuando `config.debug` está activo. */
+  private async debugDump(name: string, html: string): Promise<void> {
+    if (!this.config.debug || !html) return;
+    await persistRaw(`output/debug-${name}.html`, html);
+  }
+
+  /**
    * Simula el clic en el botón "Descargar" / "Ver Resolución" mediante un POST
    * de formulario completo (o GET directo en modo `link`) y guarda el PDF por
    * streaming. Las fallas se registran en el descargador y no interrumpen el
@@ -235,8 +297,13 @@ export class ScraperOrchestrator {
         return this.primeFaces.streamUrl(downloadButton.href);
       }
       // Modo "mojarra"/JSF: POST de formulario completo con el client ID y,
-      // si existe, el token `param_uuid` de la fila.
-      return this.primeFaces.downloadRow(page, downloadButton.id, downloadButton.paramUuid);
+      // si existe, el token `param_uuid` (y todos los pares del `jsfcljs`) de la fila.
+      return this.primeFaces.downloadRow(
+        page,
+        downloadButton.id,
+        downloadButton.paramUuid,
+        downloadButton.params
+      );
     });
 
     if (result) {

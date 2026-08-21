@@ -9,3 +9,9 @@ export async function persistJson(filePath: string, data: unknown): Promise<void
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }
+
+/** Escribe texto crudo (p.ej. HTML de diagnóstico) creando directorios. */
+export async function persistRaw(filePath: string, content: string): Promise<void> {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, content, "utf8");
+}

@@ -111,6 +111,10 @@ export interface SiteProfile {
     rowsPerPage: number;
     columns: ColumnMapping;
     download: DownloadConfig;
+    /** Campo oculto del sector (select) para filtrar por rubro en la TFA. */
+    sectorField?: string;
+    /** Mapa palabra clave → valor del `<select>` de sector (p.ej. mineria→1). */
+    sectorMap?: Record<string, string>;
   };
   /** Solo para `kind: "cards"` (PJ). */
   pj?: PjProfile;
@@ -214,7 +218,13 @@ export interface ScraperConfig {
     columns: ColumnMapping;
     /** Mecanismo de descarga de PDF por fila, por sitio. */
     download: DownloadConfig;
+    /** Campo oculto del sector (select) para filtrar en la TFA. */
+    sectorField?: string;
+    /** Mapa palabra clave → valor del `<select>` de sector. */
+    sectorMap?: Record<string, string>;
   };
+  /** Vuelca HTML crudo de diagnóstico a `output/debug-*.html`. */
+  debug: boolean;
   selectors: StaticSelectors;
 }
 
@@ -269,7 +279,7 @@ export interface HttpTextResponse {
 export interface ParsedTablePage {
   documentos: DocumentoOefa[];
   viewState?: string;
-  downloadButtons: DownloadButton[];
+  downloadButtons: (DownloadButton | undefined)[];
   paginatorId?: string;
 }
 
@@ -284,6 +294,8 @@ export interface DownloadButton {
   id: string;
   /** Token `param_uuid` que debe reenviarse en el POST de descarga. Modo `mojarra`. */
   paramUuid: string;
+  /** Todos los pares del `mojarra.jsfcljs(...)` de la fila (POST fiel al navegador). */
+  params?: Record<string, string>;
   /** URL directa al PDF cuando la descarga es un enlace. Modo `link`. */
   href?: string;
 }
@@ -367,7 +379,7 @@ export interface DocumentoPj {
 export interface ParsedCardsPage {
   documentos: DocumentoPj[];
   viewState?: string;
-  downloadButtons: DownloadButton[];
+  downloadButtons: (DownloadButton | undefined)[];
   paginatorId?: string;
 }
 

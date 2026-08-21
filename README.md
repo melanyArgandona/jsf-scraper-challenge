@@ -30,6 +30,20 @@ SCRAPER_SITE=pj npm run scrape -- "casacion" --max-pages=2
 SCRAPER_SITE=oefa npm run scrape -- "mineria" --max-pages=2
 ```
 
+### Notas del TFA de OEFA (`consultaTfa.xhtml`)
+- **Sin término = todas las resoluciones.** Si omites la palabra clave
+  (`npm run scrape -- --max-pages=2000`), el scraper pulsa "Buscar" sin filtros
+  y lista el repositorio completo (paginando hasta agotar).
+- **Palabras clave de sector.** `mineria`, `electricidad`, `hidrocarburos`,
+  `industria` y `pesqueria` se mapean automáticamente al `<select>` de sector
+  (p.ej. `mineria` → `idsector=1`); cualquier otro término se envía como texto
+  libre al número de expediente.
+- **`--debug`** vuelca HTML crudo a `output/debug-sesion.html`,
+  `output/debug-busqueda.html` y `output/debug-fila.html` (útil para afinar
+  selectores o el control de descarga sin adivinar).
+- Las filas confidenciales no traen enlace de descarga; el scraper las omite
+  (su `pdfPath` queda vacío) y no cuentan como fallo.
+
 ## ⚠️ El sitio PJ bloquea clientes no navegador (WAF 403)
 
 `jurisprudencia.pj.gob.pe` responde **403 Forbidden** (WAF `Server: rdwr`) a

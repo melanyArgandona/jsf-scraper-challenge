@@ -38,7 +38,8 @@ export class PrimeFacesClient {
     page: JsfPage,
     term: string,
     inputName: string,
-    buttonName: string
+    buttonName: string,
+    extraFields: Record<string, string> = {}
   ): Promise<JsfPage> {
     const response = await this.http.postPrimeFacesEvent({
       actionUrl: page.actionUrl,
@@ -48,7 +49,8 @@ export class PrimeFacesClient {
       execute: page.formId,
       render: page.formId,
       extraFields: {
-        [inputName]: term
+        [inputName]: term,
+        ...extraFields
       }
     });
 
@@ -112,15 +114,22 @@ export class PrimeFacesClient {
   async downloadRow(
     page: JsfPage,
     downloadButtonId: string,
-    paramUuid: string
+    paramUuid: string,
+    params?: Record<string, string>
   ): Promise<AxiosResponse> {
     const body: Record<string, string> = {
       [page.formId]: page.formId,
       "javax.faces.ViewState": page.viewState,
       [downloadButtonId]: downloadButtonId
     };
-    // Solo los sitios mojarra exigen el token param_uuid en el POST.
-    if (paramUuid.trim() !== "") {
+
+    // Todos los pares del `mojarra.jsfcljs(...)` de la fila (reproduce el POST
+    // exacto del navegador, incluyendo el token `param_uuid` y cualquier campo
+    // oculto adicional que exija el servidor).
+    if (params && Object.keys(params).length > 0) {
+      Object.assign(body, params);
+    } else if (paramUuid.trim() !== "") {
+      // Fallback: solo el token param_uuid (sitios mojarra sin pares extra).
       body.param_uuid = paramUuid;
     }
 

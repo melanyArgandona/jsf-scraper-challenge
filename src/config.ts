@@ -21,6 +21,8 @@ export interface CliArgs {
   courtesyDelayMs: number | undefined;
   /** Reintenta solo los documentos fallidos registrados en `FAILURES_PATH`. */
   resume: boolean;
+  /** Vuelca HTML crudo de diagnóstico a `output/debug-*.html`. */
+  debug: boolean;
 }
 
 /**
@@ -81,7 +83,17 @@ export function resolveScraperConfig(args: CliArgs): ScraperConfig {
       rowsPerPage: args.rowsPerPage ?? parseIntEnv("ROWS_PER_PAGE", profile.primeFaces.rowsPerPage),
       maxPages: args.maxPages ?? parseIntEnv("MAX_PAGES", 3),
       columns,
-      download
+      download,
+      ...(process.env.OEFA_SECTOR_FIELD !== undefined
+        ? { sectorField: process.env.OEFA_SECTOR_FIELD }
+        : profile.primeFaces.sectorField !== undefined
+          ? { sectorField: profile.primeFaces.sectorField }
+          : {}),
+      ...(process.env.OEFA_SECTOR_MAP !== undefined
+        ? { sectorMap: parseJsonEnv("OEFA_SECTOR_MAP", {}) }
+        : profile.primeFaces.sectorMap !== undefined
+          ? { sectorMap: profile.primeFaces.sectorMap }
+          : {})
     },
     selectors: {
       resultSelector: process.env.SELECTOR_RESULT ?? "article",
@@ -89,7 +101,8 @@ export function resolveScraperConfig(args: CliArgs): ScraperConfig {
       pdfLinkSelector:
         process.env.SELECTOR_PDF_LINK ?? "a[href*='.pdf'], a[href*='bitstream'], a[href*='download']",
       nextSelector: process.env.SELECTOR_NEXT ?? "a[rel='next']"
-    }
+    },
+    debug: args.debug ?? process.env.DEBUG === "1"
   };
 }
 
@@ -112,14 +125,22 @@ export const SITE_PROFILES: Record<ScraperSite, SiteProfile> = {
       searchPath: ""
     },
     search: {
-      inputName: "form:txtSearch",
-      buttonName: "form:btnSearch"
+      inputName: "listarDetalleInfraccionRAAForm:txtNroexp",
+      buttonName: "listarDetalleInfraccionRAAForm:btnBuscar"
     },
     primeFaces: {
       formSelector: "form",
       tableSelector: "table",
-      rowSelector: "tr.ui-widget-content",
+      rowSelector: "tbody.ui-datatable-data > tr",
       rowsPerPage: 10,
+      sectorField: "listarDetalleInfraccionRAAForm:idsector",
+      sectorMap: {
+        mineria: "1",
+        electricidad: "2",
+        hidrocarburos: "3",
+        industria: "9",
+        pesqueria: "8"
+      },
       columns: [
         "numero",
         "nroExpediente",
@@ -248,7 +269,8 @@ export function parseCliArgs(argv: string[]): CliArgs {
     maxPages: parseIntOptional(flags.get("max-pages")),
     rowsPerPage: parseIntOptional(flags.get("rows-per-page")),
     courtesyDelayMs: parseIntOptional(flags.get("delay")),
-    resume: flags.has("resume")
+    resume: flags.has("resume"),
+    debug: flags.has("debug") || process.env.DEBUG === "1"
   };
 }
 
