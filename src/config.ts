@@ -43,7 +43,8 @@ export function resolveScraperConfig(args: CliArgs): ScraperConfig {
     },
     retries: {
       maxRetries: parseIntEnv("MAX_RETRIES", 3),
-      backoffMs: parseIntEnv("BACKOFF_MS", 1500)
+      backoffMs: parseIntEnv("BACKOFF_MS", 1500),
+      maxBackoffMs: parseIntEnv("MAX_BACKOFF_MS", 60000)
     },
     http: {
       timeoutMs: parseIntEnv("TIMEOUT_MS", 30000)

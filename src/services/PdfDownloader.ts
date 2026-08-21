@@ -82,10 +82,17 @@ export class PdfDownloader {
         await this.writeStreamToFile(response, filePath);
         return { documentoId: id, filePath };
       } catch (error) {
-        const retryable = isTooManyRequests(error) && attempt < this.config.retries.maxRetries;
+        const retryable = isRetryableError(error) && attempt < this.config.retries.maxRetries;
         if (retryable) {
-          // Backoff exponencial: base * 2^intento (1.5s, 3s, 6s, ...).
-          const waitMs = this.config.retries.backoffMs * 2 ** attempt;
+          // Prioriza la cabecera Retry-After del servidor; si no existe,
+          // aplica backoff exponencial (base * 2^intento: 1.5s, 3s, 6s...)
+          // y le suma jitter para desincronizar reintentos concurrentes.
+          const exponentialWait = this.config.retries.backoffMs * 2 ** attempt;
+          const waitMs = computeRetryDelay(
+            error,
+            exponentialWait,
+            this.config.retries.maxBackoffMs
+          );
           await delay(waitMs);
           continue;
         }
@@ -127,5 +134,51 @@ export const sanitizeFileName = (value: string): string =>
     .trim()
     .slice(0, 140);
 
-const isTooManyRequests = (error: unknown): boolean =>
-  error instanceof AxiosError && error.response?.status === 429;
+/**
+ * Códigos HTTP transitorios que justifican un reintento:
+ *  - 429 Too Many Requests (rate limit).
+ *  - 5xx errores de servidor (500/502/503/504) habitualmente recuperables.
+ * Además, cualquier error de red/timeout (sin respuesta, p.ej. ECONNRESET,
+ * ETIMEDOUT) se considera reintentable por ser transitorio.
+ */
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
+const isRetryableError = (error: unknown): boolean => {
+  if (!(error instanceof AxiosError)) return false;
+  if (!error.response) return true; // fallo de red/timeout sin respuesta HTTP.
+  return RETRYABLE_STATUS.has(error.response.status);
+};
+
+/**
+ * Calcula el tiempo de espera antes del siguiente reintento:
+ *  1. Si el servidor envió `Retry-After`, se respeta (con techo maxBackoffMs).
+ *  2. En su defecto, usa el backoff exponencial recibido.
+ *  3. Aplica *full jitter* (espera aleatoria en [0, base]) para evitar que
+ *     múltiples descargas reintenten sincronizadas (thundering herd).
+ */
+const computeRetryDelay = (
+  error: unknown,
+  exponentialWaitMs: number,
+  maxBackoffMs: number
+): number => {
+  const serverWait = parseRetryAfterMs(error);
+  const base = Math.min(serverWait ?? exponentialWaitMs, maxBackoffMs);
+  return Math.floor(Math.random() * base);
+};
+
+/** Interpreta la cabecera `Retry-After`: segundos o fecha HTTP. */
+const parseRetryAfterMs = (error: unknown): number | undefined => {
+  if (!(error instanceof AxiosError)) return undefined;
+  const header = error.response?.headers["retry-after"];
+  if (header === undefined) return undefined;
+
+  const asSeconds = Number(header);
+  if (Number.isFinite(asSeconds)) return asSeconds * 1000;
+
+  const asDate = Date.parse(String(header));
+  if (!Number.isNaN(asDate)) {
+    const delta = asDate - Date.now();
+    return delta > 0 ? delta : undefined;
+  }
+  return undefined;
+};

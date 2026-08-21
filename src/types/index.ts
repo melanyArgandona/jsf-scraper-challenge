@@ -119,8 +119,10 @@ export interface ScraperConfig {
   };
   retries: {
     maxRetries: number;
-    /** Base del backoff exponencial (ms) para errores HTTP 429. */
+    /** Base del backoff exponencial (ms) antes del jitter. */
     backoffMs: number;
+    /** Techo (ms) para cualquier espera de reintento (Retry-After o backoff). */
+    maxBackoffMs: number;
   };
   http: {
     timeoutMs: number;

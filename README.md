@@ -56,7 +56,7 @@ Capas separadas (Red / JSF / Parsing / Almacenamiento / Orquestacion / Estrategi
 - `src/http/index.ts`: fachada de red (re-exporta la implementacion).
 - `src/services/HttpClient.ts`: boundary de red con `axios-cookiejar-support` + `tough-cookie` (persistencia automatica del `JSESSIONID`), cabeceras realistas, POST AJAX PrimeFaces y stream para PDFs. Decodifica respuestas UTF-8/latin1 de forma defensiva.
 - `src/services/HtmlParser.ts`: parsing DOM con Cheerio: filas `<tr>`→`DocumentoOefa`, ViewState (HTML y XML parcial), paginador PrimeFaces, enlaces PDF.
-- `src/services/PdfDownloader.ts`: descarga por `fs.createWriteStream` (sin OOM), backoff exponencial solo ante HTTP 429, registro de fallas y continuacion, sanitizacion de nombres, reutilizacion de archivos ya descargados.
+- `src/services/PdfDownloader.ts`: descarga por `fs.createWriteStream` (sin OOM), reintentos con **backoff exponencial + jitter** y respeto de la cabecera `Retry-After` ante HTTP 429, 5xx y errores de red; registro de fallas y continuacion con el siguiente documento; sanitizacion de nombres; reutilizacion de archivos ya descargados.
 - `src/jsf/PrimeFacesClient.ts`: protocolo JSF/PrimeFaces: sesion inicial, POST de busqueda y paginacion manteniendo el ViewState vigente y fusionando `<update>`.
 - `src/core/ScraperOrchestrator.ts`: cerebro del flujo JSF: sesion (GET), bucle de paginacion, tasa de cortesia (1.5s configurable), persistencia JSON ordenada.
 - `src/scraper/`: capa Strategy/Factory/Decorator.
@@ -97,7 +97,7 @@ JSF mantiene estado en campos ocultos, especialmente `javax.faces.ViewState`. Pr
 | `JSF_SEARCH_BUTTON` | `form:btnSearch` |
 | `MAX_PAGES` / `ROWS_PER_PAGE` | `3` / `20` |
 | `COURTESY_DELAY_MS` | `1500` |
-| `MAX_RETRIES` / `BACKOFF_MS` | `3` / `1500` |
+| `MAX_RETRIES` / `BACKOFF_MS` / `MAX_BACKOFF_MS` | `3` / `1500` / `60000` |
 | `TIMEOUT_MS` | `30000` |
 | `OUTPUT_JSON` / `OUTPUT_RESULTS_JSON` / `PDF_DIR` | `output/...` |
 | `SELECTOR_RESULT` / `SELECTOR_DETAIL_LINK` / `SELECTOR_PDF_LINK` / `SELECTOR_NEXT` | selectores CSS adaptables |
