@@ -154,6 +154,10 @@ export class ScraperOrchestrator {
         this.config.primeFaces.rowsPerPage
       );
 
+      if (this.config.debug && pageIndex >= 1) {
+        await this.debugDump(`pagina${pageIndex + 2}`, page.html);
+      }
+
       if (!page.html.trim()) break;
     }
 
@@ -242,6 +246,10 @@ export class ScraperOrchestrator {
         (pageIndex + 1) * this.config.primeFaces.rowsPerPage,
         this.config.primeFaces.rowsPerPage
       );
+
+      if (this.config.debug && pageIndex >= 1) {
+        await this.debugDump(`pagina${pageIndex + 2}`, page.html);
+      }
 
       if (!page.html.trim()) break;
     }

@@ -279,7 +279,11 @@ export class HtmlParser {
     rowSelector?: string,
     download?: DownloadConfig
   ): (DownloadButton | undefined)[] {
-    const $ = cheerio.load(html);
+    // Las respuestas de paginación de PrimeFaces devuelven `<tr>` sueltos (sin
+    // `<table>`); igual que en `parseDocumentos`, se envuelven en una tabla
+    // sintética para que cheerio los resuelva correctamente.
+    const wrapped = /^\s*<tr\b/i.test(html) && !/<table/i.test(html) ? `<table>${html}</table>` : html;
+    const $ = cheerio.load(wrapped);
     const scope = tableSelector ? `${tableSelector} ` : "";
     let rows = $(`${scope}${rowSelector ?? DEFAULT_ROW_SELECTOR}`);
     if (rows.length === 0) rows = $("tr").filter(":has(td)");
