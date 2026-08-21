@@ -168,8 +168,8 @@ export const SITE_PROFILES: Record<ScraperSite, SiteProfile> = {
       searchPath: ""
     },
     search: {
-      inputName: process.env.PJ_SEARCH_INPUT ?? "formBusqueda:txtBusqueda",
-      buttonName: process.env.PJ_SEARCH_BUTTON ?? "formBusqueda:btnBuscar"
+      inputName: process.env.PJ_SEARCH_INPUT ?? "formBuscador:txtBusqueda",
+      buttonName: process.env.PJ_SEARCH_BUTTON ?? "formBuscador"
     },
     primeFaces: {
       formSelector: "form",
