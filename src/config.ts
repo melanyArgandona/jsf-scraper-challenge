@@ -23,6 +23,8 @@ export interface CliArgs {
   resume: boolean;
   /** Vuelca HTML crudo de diagnóstico a `output/debug-*.html`. */
   debug: boolean;
+  /** Descargas de PDF concurrentes por página (1 = secuencial). */
+  concurrency: number | undefined;
 }
 
 /**
@@ -102,7 +104,8 @@ export function resolveScraperConfig(args: CliArgs): ScraperConfig {
         process.env.SELECTOR_PDF_LINK ?? "a[href*='.pdf'], a[href*='bitstream'], a[href*='download']",
       nextSelector: process.env.SELECTOR_NEXT ?? "a[rel='next']"
     },
-    debug: args.debug ?? process.env.DEBUG === "1"
+    debug: args.debug ?? process.env.DEBUG === "1",
+    concurrency: args.concurrency ?? parseIntEnv("CONCURRENCY", 1)
   };
 }
 
@@ -270,7 +273,8 @@ export function parseCliArgs(argv: string[]): CliArgs {
     rowsPerPage: parseIntOptional(flags.get("rows-per-page")),
     courtesyDelayMs: parseIntOptional(flags.get("delay")),
     resume: flags.has("resume"),
-    debug: flags.has("debug") || process.env.DEBUG === "1"
+    debug: flags.has("debug") || process.env.DEBUG === "1",
+    concurrency: parseIntOptional(flags.get("concurrency"))
   };
 }
 

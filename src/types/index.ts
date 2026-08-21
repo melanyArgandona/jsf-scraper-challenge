@@ -225,6 +225,8 @@ export interface ScraperConfig {
   };
   /** Vuelca HTML crudo de diagnóstico a `output/debug-*.html`. */
   debug: boolean;
+  /** Descargas de PDF concurrentes por página (1 = secuencial, comportamiento original). */
+  concurrency: number;
   selectors: StaticSelectors;
 }
 

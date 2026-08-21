@@ -202,6 +202,15 @@ export class HtmlParser {
   }
 
   /**
+   * Total de registros de la consulta actual (del `rowCount:N` del widget
+   * DataTable de PrimeFaces). Permite estimar el ETA de descarga.
+   */
+  extractTotalRecords(html: string): number | undefined {
+    const match = html.match(/rowCount:(\d+)/);
+    return match ? Number.parseInt(match[1] ?? "0", 10) : undefined;
+  }
+
+  /**
    * Devuelve el HTML externo de la primera fila de datos (para depurar el
    * control de descarga y el orden de columnas sin volcar toda la página).
    */

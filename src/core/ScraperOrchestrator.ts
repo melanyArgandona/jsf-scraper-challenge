@@ -14,6 +14,9 @@ import {
   ScraperConfig
 } from "../types";
 
+/** Tarea de descarga de una fila: documento + botón (o `undefined` si la fila no tiene PDF). */
+type RowTask = { doc: DocumentoOefa | DocumentoPj; btn: DownloadButton | undefined };
+
 /**
  * El "cerebro" del flujo JSF/PrimeFaces de la tabla del TFA. Coordina la
  * sesión (GET inicial + búsqueda opcional), el bucle principal de
@@ -33,6 +36,11 @@ export class ScraperOrchestrator {
     private readonly pdfDownloader: PdfDownloader
   ) {}
 
+  /** Estadísticas de progreso (filas procesadas, PDFs, fallidos, inicio). */
+  private stats = { processed: 0, downloaded: 0, failed: 0, start: Date.now() };
+  /** Total de registros de la consulta (para estimar el ETA). */
+  private totalRecords: number | undefined;
+
   /**
    * Ejecuta el scraper completo.
    *
@@ -42,6 +50,7 @@ export class ScraperOrchestrator {
    */
   async run(query?: string, maxPages?: number): Promise<DocumentoOefa[]> {
     const pageCount = maxPages ?? this.config.primeFaces.maxPages;
+    this.resetStats();
 
     // 1) Inicializa la sesión: GET con persistencia del JSESSIONID.
     let page = await this.primeFaces.startSession(this.config.urls.startUrl);
@@ -105,6 +114,9 @@ export class ScraperOrchestrator {
       }
 
       if (parsed.paginatorId) rememberedPaginatorId = parsed.paginatorId;
+      if (pageIndex === 0) {
+        this.totalRecords = this.parser.extractTotalRecords(page.html) ?? this.totalRecords;
+      }
 
       if (this.config.debug && pageIndex === 0) {
         await this.debugDump(
@@ -117,19 +129,18 @@ export class ScraperOrchestrator {
         );
       }
 
+      const tasks: RowTask[] = [];
       for (let index = 0; index < parsed.documentos.length; index += 1) {
         const documento = parsed.documentos[index];
         if (documento === undefined) continue;
-
         const compositeKey = `${pageIndex}:${documento.id}`;
         if (documentos.has(compositeKey)) continue;
         documentos.set(compositeKey, documento);
-
-        const downloadButton = parsed.downloadButtons[index];
-        if (!downloadButton) continue;
-
-        await this.downloadDocumento(documento, page, downloadButton);
+        tasks.push({ doc: documento, btn: parsed.downloadButtons[index] });
       }
+
+      await this.processRows(page, tasks);
+      this.logProgress(pageIndex);
 
       if (!rememberedPaginatorId || parsed.documentos.length === 0) break;
 
@@ -159,6 +170,7 @@ export class ScraperOrchestrator {
    */
   async runPj(query?: string, maxPages?: number): Promise<DocumentoPj[]> {
     const pageCount = maxPages ?? this.config.primeFaces.maxPages;
+    this.resetStats();
     const pj = SITE_PROFILES[this.config.site]?.pj;
     if (!pj) {
       throw new Error("El perfil del sitio PJ no tiene configuracion de tarjetas");
@@ -203,20 +215,22 @@ export class ScraperOrchestrator {
       }
 
       if (parsed.paginatorId) rememberedPaginatorId = parsed.paginatorId;
+      if (pageIndex === 0) {
+        this.totalRecords = this.parser.extractTotalRecords(page.html) ?? this.totalRecords;
+      }
 
+      const tasks: RowTask[] = [];
       for (let index = 0; index < parsed.documentos.length; index += 1) {
         const documento = parsed.documentos[index];
         if (documento === undefined) continue;
-
         const compositeKey = `${pageIndex}:${documento.id}`;
         if (documentos.has(compositeKey)) continue;
         documentos.set(compositeKey, documento);
-
-        const downloadButton = parsed.downloadButtons[index];
-        if (!downloadButton) continue;
-
-        await this.downloadDocumento(documento, page, downloadButton);
+        tasks.push({ doc: documento, btn: parsed.downloadButtons[index] });
       }
+
+      await this.processRows(page, tasks);
+      this.logProgress(pageIndex);
 
       if (!rememberedPaginatorId || parsed.documentos.length === 0) break;
 
@@ -274,6 +288,59 @@ export class ScraperOrchestrator {
   private async debugDump(name: string, html: string): Promise<void> {
     if (!this.config.debug || !html) return;
     await persistRaw(`output/debug-${name}.html`, html);
+  }
+
+  /** Reinicia las estadísticas de progreso al inicio de cada corrida. */
+  private resetStats(): void {
+    this.stats = { processed: 0, downloaded: 0, failed: 0, start: Date.now() };
+    this.totalRecords = undefined;
+  }
+
+  /**
+   * Descarga los PDF de una página con concurrencia acotada (`config.concurrency`).
+   * Un pool de `limit` workers reparte las tareas; cada worker duerme la tasa de
+   * cortesía y descarga su fila. Con `concurrency=1` es idéntico al flujo
+   * secuencial original. El `page` (ViewState/acción) se comparte de solo lectura.
+   */
+  private async processRows(page: JsfPage, tasks: RowTask[]): Promise<void> {
+    if (tasks.length === 0) return;
+    const limit = Math.max(1, Math.min(this.config.concurrency, tasks.length));
+    let cursor = 0;
+
+    const worker = async (): Promise<void> => {
+      while (cursor < tasks.length) {
+        const task = tasks[cursor];
+        cursor += 1;
+        if (!task) continue;
+        const { doc, btn } = task;
+        if (!btn) {
+          this.stats.processed += 1;
+          continue;
+        }
+        await this.downloadDocumento(doc, page, btn);
+        this.stats.processed += 1;
+        if (doc.pdfPath) this.stats.downloaded += 1;
+        else this.stats.failed += 1;
+      }
+    };
+
+    await Promise.all(Array.from({ length: limit }, () => worker()));
+  }
+
+  /** Imprime progreso/ETA en stderr (no contamina el JSON de salida en stdout). */
+  private logProgress(pageIndex: number): void {
+    const elapsed = (Date.now() - this.stats.start) / 1000;
+    const rate = this.stats.processed / Math.max(elapsed, 0.1);
+    let eta = "";
+    if (this.totalRecords && this.stats.processed > 0) {
+      const remaining = Math.max(0, this.totalRecords - this.stats.processed);
+      eta = ` | ETA ~${Math.round(remaining / rate)}s`;
+    }
+    process.stderr.write(
+      `[progreso] pagina ${pageIndex + 1} | filas ${this.stats.processed} | ` +
+        `PDFs ${this.stats.downloaded} | fallidos ${this.stats.failed} | ` +
+        `${rate.toFixed(2)} pdf/s | ${elapsed.toFixed(0)}s${eta}\n`
+    );
   }
 
   /**

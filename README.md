@@ -43,6 +43,11 @@ SCRAPER_SITE=oefa npm run scrape -- "mineria" --max-pages=2
   selectores o el control de descarga sin adivinar).
 - Las filas confidenciales no traen enlace de descarga; el scraper las omite
   (su `pdfPath` queda vacío) y no cuentan como fallo.
+- **Concurrencia de descarga:** `--concurrency=N` (o `CONCURRENCY=N`) descarga
+  hasta N PDFs en paralelo por página (por defecto `1` = secuencial, para no
+  disparar 429). Con N=4–6 el tiempo baja ~4–6×. El resumen JSON va a stdout;
+  el progreso/`ETA` va a stderr (`[progreso] pagina X | filas N | PDFs D |
+  fallidos F | R pdf/s | Ts | ETA ~Ss`).
 
 ## ⚠️ El sitio PJ bloquea clientes no navegador (WAF 403)
 
